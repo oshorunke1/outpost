@@ -48,8 +48,18 @@ local function OnPlayerAdded(Player: Player)
 		Player:Kick("Your save could not be upgraded. Please rejoin in a minute.")
 		return
 	end
+	-- Keep the original so it can be put back if the upgraded save turns out to be unsafe.
+	local Original = SaveSafety.DeepCopy(Profile.Data)
 	SaveSafety.ReplaceContents(Profile.Data, Outcome.Data :: { [string]: any })
 	Profile:Reconcile()
+	local Safe, Problem = SaveSafety.Check(Profile.Data)
+	if not Safe then
+		warn(`[DataService] the upgraded save for {Player.Name} is unsafe ({Problem}), leaving it as it was`)
+		SaveSafety.ReplaceContents(Profile.Data, Original)
+		Profile:Release()
+		Player:Kick("Your save could not be verified. Please rejoin in a minute.")
+		return
+	end
 
 	Profile:ListenToRelease(function()
 		Profiles[Player] = nil
@@ -70,7 +80,7 @@ local function OnPlayerAdded(Player: Player)
 	DataService:PushSnapshot(Player)
 end
 
-local function OnPlayerRemoving(Player: Player)
+local function ReleaseSafely(Player: Player)
 	local Profile = Profiles[Player]
 	if Profile == nil then
 		return
@@ -78,8 +88,9 @@ local function OnPlayerRemoving(Player: Player)
 	local Safe, Problem = SaveSafety.Check(Profile.Data)
 	if not Safe then
 		warn(`[DataService] {Player.Name} had unsafe data ({Problem}), saving the last good copy instead`)
-		SaveSafety.ReplaceContents(Profile.Data, LastGood[Player])
+		SaveSafety.ReplaceContents(Profile.Data, SaveSafety.DeepCopy(LastGood[Player]))
 	end
+	Profiles[Player] = nil
 	Profile:Release()
 	print(`[DataService] released {Player.Name}`)
 end
@@ -100,7 +111,13 @@ function DataService:Init()
 	end)
 
 	Players.PlayerAdded:Connect(OnPlayerAdded)
-	Players.PlayerRemoving:Connect(OnPlayerRemoving)
+	Players.PlayerRemoving:Connect(ReleaseSafely)
+	-- On shutdown every profile gets the same check before it is released.
+	game:BindToClose(function()
+		for Player in Profiles do
+			ReleaseSafely(Player)
+		end
+	end)
 	-- Players who joined before this ran still need their saves loaded.
 	for _, Player in Players:GetPlayers() do
 		task.spawn(OnPlayerAdded, Player)

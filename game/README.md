@@ -56,6 +56,7 @@ The owner runs these by hand in Studio. Nothing here is automated.
 - [ ] Your Player has a `ProfileLoaded` BindableEvent child and the attribute `ProfileLoaded = true`.
 - [ ] Stop the session. Server output shows `[DataService] released <you>` with no errors.
 - [ ] Set the attribute `ForceMockData = true` on ServerStorage in Edit mode, then Play Solo. Output still says the Mock store. Remove the attribute afterwards.
+- [ ] Write a save with a NaN value into the Mock store from the command bar, then join. The player is kicked and the stored data is left unchanged.
 
 ### Orbs
 
