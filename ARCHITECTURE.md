@@ -138,7 +138,7 @@ The client mirrors this with `ClientStart`, the same `Loader`, `NetClient`, and 
 ### Boot
 
 1. `ServerStart` calls `Loader.LoadFolders` on `ServerStorage.Classes.Services`. It skips modules with a truthy `Disabled` attribute, modules named `-Template-`, and class modules (anything with `new` or `Get`). A module that fails to `require` is warned about and skipped. The rest are ordered by `Priority` (DataService is 10, the rest default to 100), then by name.
-2. `Loader.InitAll` runs each `Init` in its own coroutine and checks that the coroutine finished. Services call `NetGuard.Listen` here. An Init that errors or yields is warned about and left out, so it is never Started. (A yielding Init's coroutine is not closed; see the known gaps in [docs/threat-model.md](docs/threat-model.md).)
+2. `Loader.InitAll` runs each `Init` in its own coroutine and checks that the coroutine finished. Services call `NetGuard.Listen` here. An Init that errors or yields is warned about and left out, so it is never Started. A yielding Init's coroutine is closed with `coroutine.close`, so the rest of that Init can never run later. A handler that Init already registered with `NetGuard.Listen` stays registered, though; see the known gaps in [docs/threat-model.md](docs/threat-model.md).
 3. `NetGuard.Seal()` seals the gate, creates `ReplicatedStorage.Remotes` with one `RemoteEvent` per packet, and connects `OnServerEvent` only for client-to-server packets. The packet name each connection passes to the gate is bound on the server, not read from the client. After Seal, `Listen` errors.
 4. `Loader.StartAll` runs each `Start` in its own thread under `pcall`, so one slow or failing Start never holds up the rest.
 

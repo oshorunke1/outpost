@@ -78,7 +78,8 @@ end
 
 -- Runs Init on every module, one after another. Init has to finish straight away, so each one runs
 -- in its own coroutine and we check it really finished. One that errors or yields is left out of
--- the returned list, so it never gets Started, and everything else carries on.
+-- the returned list, so it never gets Started, and everything else carries on. A yielded thread
+-- also gets closed, so the rest of that Init can never run later.
 function Loader.InitAll(List: { Loaded }, Hooks: Hooks?): { Loaded }
 	local Warn = Pick(Hooks, "Warn", DefaultWarn) :: (string) -> ()
 	local Ready: { Loaded } = {}
@@ -94,6 +95,8 @@ function Loader.InitAll(List: { Loaded }, Hooks: Hooks?): { Loaded }
 			Warn(`[Loader] {Entry.Name} Init failed, {Err}`)
 		elseif coroutine.status(Thread) ~= "dead" then
 			Warn(`[Loader] {Entry.Name} Init yielded. Init must never wait, so move that work into Start`)
+			-- Close the paused thread so the scheduler can never wake it up and finish Init later.
+			coroutine.close(Thread)
 		else
 			table.insert(Ready, Entry)
 		end

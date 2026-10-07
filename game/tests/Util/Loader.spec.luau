@@ -177,6 +177,53 @@ Describe("Loader.InitAll and StartAll", function()
 		Expect(string.find(Warnings[1], "Waiter Init yielded", 1, true) ~= nil).ToBe(true)
 	end)
 
+	It("a yielded Init thread is closed so nothing can resume it later", function()
+		local FlagSet = false
+		local Captured: thread? = nil
+		local Hooks = MakeHooks({})
+		local List = Loader.LoadFolders({
+			FakeFolder({
+				FakeModule("Sleeper", {
+					Init = function()
+						Captured = coroutine.running()
+						coroutine.yield()
+						FlagSet = true
+					end,
+				}),
+			}),
+		}, Hooks)
+		Loader.InitAll(List, Hooks)
+		local Thread = Captured :: thread
+		Expect(coroutine.status(Thread)).ToBe("dead")
+		-- Pretend the scheduler tries to wake it up anyway. It should stay asleep for good.
+		pcall(coroutine.resume, Thread)
+		Expect(FlagSet).ToBe(false)
+	end)
+
+	It("a well behaved module after a yielder still Inits, and only it is Ready", function()
+		local Warnings = {}
+		local GoodInitRan = false
+		local Hooks = MakeHooks(Warnings)
+		local List = Loader.LoadFolders({
+			FakeFolder({
+				FakeModule("AYielder", {
+					Init = function()
+						coroutine.yield()
+					end,
+				}),
+				FakeModule("BGood", {
+					Init = function()
+						GoodInitRan = true
+					end,
+				}),
+			}),
+		}, Hooks)
+		local Ready = Loader.InitAll(List, Hooks)
+		Expect(GoodInitRan).ToBe(true)
+		Expect(Names(Ready)).ToEqual({ "BGood" })
+		Expect(#Warnings).ToBe(1)
+	end)
+
 	It("modules without Init still count as ready", function()
 		local List = Loader.LoadFolders({ FakeFolder({ FakeModule("Plain", {}) }) }, MakeHooks({}))
 		Expect(#Loader.InitAll(List, MakeHooks({}))).ToBe(1)
