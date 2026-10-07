@@ -10,6 +10,21 @@ local Expect = Harness.Expect
 -- selene: allow(divide_by_zero)
 local NaN = 0 / 0
 
+local function DeepTable(Levels: number): { [string]: any }
+	local Root: { [string]: any } = {}
+	local Node = Root
+	for _ = 1, Levels do
+		local Child: { [string]: any } = {}
+		Node.A = Child
+		Node = Child
+	end
+	return Root
+end
+
+local function DeepPath(Levels: number): string
+	return "Data" .. string.rep(".A", Levels)
+end
+
 local function ProblemOf(Value: any): string
 	local Ok, Problem = SaveSafety.Check(Value)
 	Expect(Ok).ToBe(false)
@@ -69,18 +84,28 @@ Describe("SaveSafety.Check", function()
 	It("reports problems in key order, so the message is stable", function()
 		Expect(ProblemOf({ Zed = NaN, Alpha = math.huge })).ToBe("Data.Alpha is infinite")
 	end)
+
+	It("refuses text that is not valid UTF-8, in values and in keys", function()
+		Expect(ProblemOf({ Name = "\255" })).ToBe("Data.Name is not valid UTF-8")
+		Expect(ProblemOf({ Bag = { ["\255"] = 1 } })).ToBe("Data.Bag is not valid UTF-8")
+	end)
+
+	It("refuses tables nested past the depth cap", function()
+		Expect(ProblemOf(DeepTable(70))).ToBe(DeepPath(65) .. " is nested too deeply")
+	end)
 end)
 
 Describe("SaveSafety.TryUpdate", function()
 	It("applies a safe change and keeps the same table", function()
 		local Data = Template.Fresh() :: any
-		local Before = Data
+		local Alias = Data
 		local Ok = SaveSafety.TryUpdate(Data, function(Draft)
 			Draft.Coins += 5
 			Draft.OwnedItems.RedHat = true
 		end)
 		Expect(Ok).ToBe(true)
-		Expect(Data).ToBe(Before)
+		Expect(Alias.Coins).ToBe(5)
+		Expect(Alias.OwnedItems.RedHat).ToBe(true)
 		Expect(Data.Coins).ToBe(5)
 		Expect(Data.OwnedItems.RedHat).ToBe(true)
 	end)
@@ -94,6 +119,27 @@ Describe("SaveSafety.TryUpdate", function()
 		Expect(Ok).ToBe(false)
 		Expect(Problem).ToBe("Data.Coins is NaN")
 		Expect(Data).ToEqual(Template.Fresh())
+	end)
+
+	It("refuses bad text and deep nesting and leaves the data alone", function()
+		local Bad: { (any) -> () } = {
+			function(Draft)
+				Draft.Name = "\255"
+			end,
+			function(Draft)
+				Draft.Stats["\255"] = 1
+			end,
+			function(Draft)
+				Draft.Deep = DeepTable(70)
+			end,
+		}
+		for _, Mutator in Bad do
+			local Data = Template.Fresh() :: any
+			local Ok, Problem = SaveSafety.TryUpdate(Data, Mutator)
+			Expect(Ok).ToBe(false)
+			Expect(Problem ~= nil).ToBe(true)
+			Expect(Data).ToEqual(Template.Fresh())
+		end
 	end)
 
 	It("refuses a change that throws and leaves the data alone", function()
@@ -121,9 +167,11 @@ Describe("SaveSafety.ReplaceContents", function()
 	It("keeps the same table, drops old keys and brings in the new values", function()
 		local Target: { [string]: any } = { OnlyHere = 1, Shared = "old" }
 		local Source: { [string]: any } = { Shared = "new", Extra = { 7 } }
-		local Held = Target
+		local Alias = Target
 		SaveSafety.ReplaceContents(Target, Source)
-		Expect(rawequal(Held, Target)).ToBe(true)
+		Expect(Alias.Shared).ToBe("new")
+		Expect(Alias.OnlyHere).ToBe(nil)
+		Expect(Alias.Extra).ToBe(Source.Extra)
 		Expect(Target.OnlyHere).ToBe(nil)
 		Expect(Target.Shared).ToBe("new")
 		Expect(Target.Extra).ToBe(Source.Extra)

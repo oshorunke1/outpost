@@ -7,10 +7,18 @@
 local SaveSafety = {}
 
 local ListKeyProblem = "has a gap or a key that is not 1, 2, 3 and so on"
+-- DataStore refuses very deep tables, and the cap also keeps the recursion here from overflowing the stack.
+local MaxDepth = 64
 
-local function CheckValue(Value: any, Path: string, Visiting: { [any]: boolean }): string?
+local function CheckValue(Value: any, Path: string, Visiting: { [any]: boolean }, Depth: number): string?
 	local Kind = type(Value)
-	if Kind == "boolean" or Kind == "string" then
+	if Kind == "boolean" then
+		return nil
+	end
+	if Kind == "string" then
+		if utf8.len(Value) == nil then
+			return `{Path} is not valid UTF-8`
+		end
 		return nil
 	end
 	if Kind == "number" then
@@ -24,6 +32,9 @@ local function CheckValue(Value: any, Path: string, Visiting: { [any]: boolean }
 	end
 	if Kind ~= "table" then
 		return `{Path} is a {Kind}, which cannot be saved`
+	end
+	if Depth > MaxDepth then
+		return `{Path} is nested too deeply`
 	end
 	if Visiting[Value] then
 		return `{Path} contains itself`
@@ -39,6 +50,9 @@ local function CheckValue(Value: any, Path: string, Visiting: { [any]: boolean }
 		Count += 1
 		local KeyKind = type(Key)
 		if KeyKind == "string" then
+			if utf8.len(Key) == nil then
+				return `{Path} is not valid UTF-8`
+			end
 			HasStringKey = true
 		elseif KeyKind == "number" then
 			HasNumberKey = true
@@ -62,7 +76,7 @@ local function CheckValue(Value: any, Path: string, Visiting: { [any]: boolean }
 		end
 		if Problem == nil then
 			for Index = 1, Count do
-				Problem = CheckValue(Value[Index], `{Path}[{Index}]`, Visiting)
+				Problem = CheckValue(Value[Index], `{Path}[{Index}]`, Visiting, Depth + 1)
 				if Problem then
 					break
 				end
@@ -75,7 +89,7 @@ local function CheckValue(Value: any, Path: string, Visiting: { [any]: boolean }
 		end
 		table.sort(Keys)
 		for _, Key in Keys do
-			Problem = CheckValue(Value[Key], `{Path}.{Key}`, Visiting)
+			Problem = CheckValue(Value[Key], `{Path}.{Key}`, Visiting, Depth + 1)
 			if Problem then
 				break
 			end
@@ -86,7 +100,7 @@ local function CheckValue(Value: any, Path: string, Visiting: { [any]: boolean }
 end
 
 function SaveSafety.Check(Value: any): (boolean, string?)
-	local Problem = CheckValue(Value, "Data", {})
+	local Problem = CheckValue(Value, "Data", {}, 0)
 	return Problem == nil, Problem
 end
 
@@ -103,7 +117,7 @@ end
 
 -- Empties Target and fills it with whatever Source holds, keeping Target as the same table
 -- so anything that already points at it (like ProfileService) still sees the new contents.
-function SaveSafety.ReplaceContents(Target: { [string]: any }, Source: { [string]: any })
+function SaveSafety.ReplaceContents(Target: { [string]: any }, Source: { [string]: any }): ()
 	for Key in Target do
 		Target[Key] = nil
 	end
