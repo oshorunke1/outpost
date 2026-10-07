@@ -10,9 +10,9 @@ Player saves are the one thing a Roblox game cannot get wrong. The classic failu
 ## Decision
 
 - Saves go through ProfileService, vendored unchanged from the public MadStudioRoblox upstream (Apache-2.0) at a pinned commit. Its session locking means only one server can hold a player's profile at a time, which is what stops cross-server duplication.
-- `DataService` is the only module that touches profiles. `GetPlayerProfile(Player)` keeps the familiar API, but changes go through `Update(Player, Mutator)`, which runs `SaveSafety.TryUpdate` and refuses anything unsafe.
+- `DataService` is the only module that holds profiles. `Update(Player, Mutator)` is the sanctioned way to change a save, and every `Update` runs `SaveSafety.TryUpdate`, which refuses anything unsafe. `GetData(Player)` returns the live save table, so code that writes to it directly skips that check (see the known gaps in [docs/threat-model.md](../threat-model.md)).
 - Every save has a `SchemaVersion`. On load, `Migrator.Run` upgrades it on a copy. A save from a newer version, or one whose migration throws, is released untouched and the player is asked to rejoin, so nothing half migrated is ever saved. `Reconcile` then fills missing fields from `Template.Defaults`.
-- Before release, the save is checked again. If something wrote unsafe data around `Update`, the last copy that passed is saved instead.
+- Before release, the save is checked again, and if it fails the last copy that passed is saved instead. This is a backstop for the final save only. ProfileService also autosaves every loaded profile on a 30 s cycle, so data changed around `Update` can reach the DataStore on an autosave before release.
 - `StoreSelector` picks the store: Studio never touches live saves, and unknown places never use the Live store.
 
 ## Alternatives considered

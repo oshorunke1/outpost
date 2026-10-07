@@ -1,7 +1,8 @@
 --!strict
--- DataService loads each player's save with ProfileService, upgrades old saves with the Migrator,
--- and is the only place that changes save data. Other services call Update, which refuses any
--- change that would make the save unsafe, so a bug can never write NaN or a function into a DataStore.
+-- DataService loads each player's save with ProfileService and upgrades old saves with the Migrator.
+-- Update is the only sanctioned way to change save data, and every Update is checked, so a change
+-- that would put NaN or a function into the save is refused. GetData hands back the live table,
+-- so code that writes to it directly skips that check. The release check is only a backstop.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -122,10 +123,6 @@ function DataService:Init()
 	for _, Player in Players:GetPlayers() do
 		task.spawn(OnPlayerAdded, Player)
 	end
-end
-
-function DataService:GetPlayerProfile(Player: Player): any?
-	return Profiles[Player]
 end
 
 function DataService:GetData(Player: Player): ProfileData?
