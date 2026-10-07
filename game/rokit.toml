@@ -1,0 +1,8 @@
+# Pinned tools for the Outpost game. Run `rokit install` inside game/ after cloning.
+# Rojo stays on 7.6.1 because Windows Smart App Control blocks the 7.7 build on the owner's machine.
+[tools]
+rojo = "rojo-rbx/rojo@7.6.1"
+lune = "lune-org/lune@0.10.5"
+selene = "Kampfkarren/selene@0.31.0"
+stylua = "JohnnyMorganz/StyLua@2.5.2"
+luau-lsp = "JohnnyMorganz/luau-lsp@1.69.0"

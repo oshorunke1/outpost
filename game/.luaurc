@@ -1,0 +1,10 @@
+{
+	"languageMode": "strict",
+	"aliases": {
+		"Shared": "src/ReplicatedStorage/Shared",
+		"Logic": "src/ReplicatedStorage/Shared/Logic",
+		"Configs": "src/ReplicatedStorage/Shared/Configs",
+		"Scripts": "scripts",
+		"Tests": "tests"
+	}
+}
