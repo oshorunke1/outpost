@@ -1,5 +1,71 @@
 # Outpost
 
-A server-authoritative Roblox game framework, the game backend it talks to, and an agent-safe operations layer (MCP), all in one repo.
+A server-authoritative Roblox game framework, the game backend it talks to, and an agent-safe operations layer (MCP) on top, all in one repo. The sample game, "Orbs" (collect orbs, earn Coins, buy a cosmetic), exists only to exercise the framework. There is no live game and no player count.
 
-Milestone 1 (the framework) is in progress. The design lives in [docs/superpowers/specs/2026-10-06-outpost-design.md](docs/superpowers/specs/2026-10-06-outpost-design.md).
+Only the framework (`game/`, milestone M1) is built. The backend is planned (M2) and the MCP layer is planned (M3). The diagram shows dotted arrows for the parts that do not exist yet.
+
+```mermaid
+flowchart LR
+  Player(["Roblox player"]) -->|RemoteEvents| Game["game/ (built)"]
+  Game -.->|"HTTPS, planned (M2)"| Backend["backend/ (planned)"]
+  Agent(["AI agent"]) -.->|"MCP, planned (M3)"| MCP["mcp/ (planned)"]
+  MCP -.-> Backend
+```
+
+The full picture is in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Media
+
+These are placeholders until the recordings exist (M4):
+
+- `docs/media/orbs-demo.gif` will show the Orbs loop: collecting orbs, Coins rising, buying the Red Hat.
+- `docs/media/jaeger-trace.png` will show one MCP call traced through the backend into MySQL (M3).
+- `docs/media/eval-report.png` will show the first live eval report (M3).
+
+## Quickstart (Luau, about 2 minutes)
+
+Install [Rokit](https://github.com/rojo-rbx/rokit), then:
+
+```bash
+cd game
+rokit install
+lune run tests/Runner
+rojo serve
+```
+
+`lune run tests/Runner` runs the 138 Lune specs and ends with `138 passed, 0 failed`. Connect the Rojo plugin in Studio and press Play to try the game. M1 needs no Docker and no backend. Every check CI runs can be run locally with `bash tools/ci/luau-check.sh`.
+
+The full-system quickstart (`docker compose up -d && pnpm demo`) arrives with M2.
+
+## What to look at first
+
+- **Roblox reviewers:** [NetGuard](game/src/ServerStorage/Classes/Util/NetGuard.luau), [Packets.luau](game/src/ReplicatedStorage/Shared/Net/Packets.luau), [PacketGate](game/src/ReplicatedStorage/Shared/Logic/Net/PacketGate.luau), [DataService](game/src/ServerStorage/Classes/Services/DataService.luau) with [Migrator](game/src/ReplicatedStorage/Shared/Logic/Data/Migrator.luau), and [ADR 0005](docs/adr/0005-server-authoritative-remotes.md).
+- **Backend reviewers:** planned (M2). The ledger, refresh-token reuse detection and ADR 0008 land there.
+- **AI and agent reviewers:** planned (M3). The policy tier map, approvals, the untrusted-text wrapper and the eval report land there. Today, [the framework manifest](contracts/framework-manifest.json) is what the MCP server will read.
+- **Architects:** [ARCHITECTURE.md](ARCHITECTURE.md), [the threat model](docs/threat-model.md), and [the ADRs](docs/adr/0001-monorepo-and-pinned-luau-toolchain.md).
+
+## Status
+
+| Milestone | Scope | Status |
+|---|---|---|
+| M1, the framework | Loader, NetGuard, DataService, Orbs, Lune tests, CI, ADRs 0001 to 0006 | Built |
+| M2, the backend | Identity, economy ledger, telemetry, flags, Compose, contract tests | Planned |
+| M3, the agent layer | MCP server, approvals, evals with record and replay | Planned |
+| M4, production polish | Load test numbers, dashboards, infra validation, recorded media | Optional |
+
+## Repo map
+
+| Folder | What it is |
+|---|---|
+| `game/` | Rojo project, strict Luau, Lune tests ([game/README.md](game/README.md)) |
+| `contracts/` | The generated framework manifest and its JSON schema |
+| `tools/` | The 700-line module check and the local CI script |
+| `docs/` | ADRs, the threat model, the design spec and plans |
+
+## About
+
+Built with AI pair programming. Every change was reviewed, tested and committed by me, Olushola Shorunke, and anything I could not explain was rewritten or removed.
+
+To report a security problem, see [SECURITY.md](SECURITY.md).
+
+Licensed under [MIT](LICENSE). `game/vendor/ProfileService.luau` is third-party code under the Apache License 2.0, see [game/README.md](game/README.md).
