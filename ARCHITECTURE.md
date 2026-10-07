@@ -192,7 +192,7 @@ Purchase through the backend ledger, earn batching, telemetry ingest, and the ag
 
 Strict `luau-lsp` analysis covers `game/src` only, the code that ships. Tests and scripts are format-checked and linted (StyLua, selene) and must carry the `--!strict` header, but they are not strict-analyzed. `game/vendor/` is excluded from formatting, linting and type checking.
 
-`tools/check-module-size.mjs` fails CI if any Luau, TypeScript or JavaScript module goes over 700 lines. CI (`.github/workflows/ci.yml`) has two check jobs, gated by a path-filter job (`changes`): `repo-hygiene` (module size, a secret scan, offline Markdown link check) and `luau` (the script above, run only when `game/`, `contracts/`, `tools/ci/` or the workflow changes).
+`tools/check-module-size.mjs` fails CI if any Luau, TypeScript or JavaScript module goes over 700 lines. CI (`.github/workflows/ci.yml`) has three jobs. `changes` is a path filter. `repo-hygiene` always runs (the module size check and its tests, a secret scan, offline Markdown link check). `luau` needs `changes` and runs the script above only when `game/`, `contracts/`, `tools/ci/` or the workflow changes.
 
 ## Decisions
 
