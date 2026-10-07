@@ -1,0 +1,77 @@
+--!strict
+local Harness = require("@Tests/Harness")
+local RateLimiter = require("@Logic/Net/RateLimiter")
+
+local Describe = Harness.Describe
+local It = Harness.It
+local Expect = Harness.Expect
+
+Describe("RateLimiter", function()
+	It("allows a burst up to Capacity and then refuses", function()
+		local Limiter = RateLimiter.new(3, 1)
+		Expect(Limiter:Allow(1, 0)).ToBe(true)
+		Expect(Limiter:Allow(1, 0)).ToBe(true)
+		Expect(Limiter:Allow(1, 0)).ToBe(true)
+		Expect(Limiter:Allow(1, 0)).ToBe(false)
+	end)
+
+	It("refills tokens as time passes", function()
+		local Limiter = RateLimiter.new(2, 1)
+		Expect(Limiter:Allow(1, 0)).ToBe(true)
+		Expect(Limiter:Allow(1, 0)).ToBe(true)
+		Expect(Limiter:Allow(1, 0.5)).ToBe(false)
+		Expect(Limiter:Allow(1, 1.5)).ToBe(true)
+	end)
+
+	It("never stores more than Capacity after a long idle", function()
+		local Limiter = RateLimiter.new(2, 5)
+		Expect(Limiter:Allow(1, 0)).ToBe(true)
+		Expect(Limiter:Allow(1, 1000)).ToBe(true)
+		Expect(Limiter:Allow(1, 1000)).ToBe(true)
+		Expect(Limiter:Allow(1, 1000)).ToBe(false)
+	end)
+
+	It("keeps a separate bucket for each key", function()
+		local Limiter = RateLimiter.new(1, 1)
+		Expect(Limiter:Allow(1, 0)).ToBe(true)
+		Expect(Limiter:Allow(1, 0)).ToBe(false)
+		Expect(Limiter:Allow(2, 0)).ToBe(true)
+		Expect(Limiter:Allow("Shop.Buy", 0)).ToBe(true)
+	end)
+
+	It("Forget gives the key a fresh full bucket and frees its memory", function()
+		local Limiter = RateLimiter.new(1, 0.1)
+		Expect(Limiter:Allow(7, 0)).ToBe(true)
+		Expect(Limiter:Allow(7, 0)).ToBe(false)
+		Expect(Limiter:TrackedCount()).ToBe(1)
+		Limiter:Forget(7)
+		Expect(Limiter:TrackedCount()).ToBe(0)
+		Expect(Limiter:Allow(7, 0)).ToBe(true)
+	end)
+
+	It("never grants extra tokens or errors when the clock goes backwards", function()
+		local Limiter = RateLimiter.new(1, 1)
+		Expect(Limiter:Allow(1, 10)).ToBe(true)
+		Expect(Limiter:Allow(1, 5)).ToBe(false)
+		Expect(Limiter:Allow(1, 10.5)).ToBe(false)
+		Expect(Limiter:Allow(1, 11)).ToBe(true)
+	end)
+
+	It("refuses bad settings when it is created", function()
+		Expect(function()
+			RateLimiter.new(0, 1)
+		end).ToThrow("Capacity")
+		Expect(function()
+			RateLimiter.new(2, -1)
+		end).ToThrow("RefillPerSecond")
+		Expect(function()
+			RateLimiter.new(2, math.huge)
+		end).ToThrow("RefillPerSecond")
+		Expect(function()
+			-- selene: allow(divide_by_zero)
+			RateLimiter.new(0 / 0, 1)
+		end).ToThrow("Capacity")
+	end)
+end)
+
+return nil
