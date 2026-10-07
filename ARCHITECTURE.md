@@ -1,6 +1,6 @@
 # Outpost architecture
 
-Outpost is three things in one repo: a server-authoritative Roblox game framework (`game/`), a game backend it talks to (`backend/`), and an agent-safe operations layer over MCP (`mcp/`). This document shows the target system and marks clearly what exists today.
+Outpost is designed as three things in one repo: a server-authoritative Roblox game framework (`game/`), a game backend it talks to (`backend/`), and an agent-safe operations layer over MCP (`mcp/`). This document shows the target system and marks clearly what exists today.
 
 **Status legend:** anything labelled **planned (M2)** or **planned (M3)** is designed but not built yet. Milestone 1, the game framework, is what this version of the repo contains. There is no `backend/`, `mcp/` or `evals/` folder yet.
 
@@ -160,7 +160,7 @@ sequenceDiagram
     NG->>H: task.spawn and xpcall(handler, Player, payload)
     H->>DS: Update(Player, mutator)
     DS-->>H: refused if the mutator throws or SaveSafety fails
-    H->>C: Shop.Result, then Profile.Snapshot if the save changed
+    H->>C: Shop.Result, then Profile.Snapshot if the update was accepted
   end
 ```
 
@@ -177,8 +177,8 @@ sequenceDiagram
 ### A save
 
 - **Store choice.** `StoreSelector.Choose` picks Live only for the listed live place on a real server. Studio, unknown places and place 0 never get Live. In M1 `Configs/Places` lists no live place, so Live is never used.
-- **Load.** `LoadProfileAsync("Player_<UserId>", "ForceLoad")` takes ProfileService's session lock. `Migrator.Run` upgrades a copy; a save from a newer version, a bad `SchemaVersion` or a throwing migration releases the profile untouched and kicks the player. The migrated copy is moved in with `SaveSafety.ReplaceContents`, then `Reconcile` fills missing fields, then `SaveSafety.Check` runs on the result. If that fails, the original data is put back, the profile is released and the player is kicked, so nothing unsafe is ever written. Only checked data becomes `LastGood`.
-- **Change.** Services change saves through `DataService:Update`, which runs `SaveSafety.TryUpdate`: the mutator runs under `pcall` on a deep copy, the copy is checked, and only a safe copy is moved into the live table. `LastGood` is refreshed after each accepted update. `GetData` does hand back the live table, so the release check below is the backstop if code ever writes around `Update`.
+- **Load.** `LoadProfileAsync("Player_<UserId>", "ForceLoad")` takes ProfileService's session lock. `Migrator.Run` upgrades a copy; a save from a newer version, a bad `SchemaVersion` or a throwing migration releases the profile untouched and kicks the player. The migrated copy is moved in with `SaveSafety.ReplaceContents`, then `Reconcile` fills missing fields, then `SaveSafety.Check` runs on the result. If that fails, the original data is put back, the profile is released and the player is kicked, so the save is left exactly as it was loaded. Only checked data becomes `LastGood`.
+- **Change.** Services change saves through `DataService:Update`, which runs `SaveSafety.TryUpdate`: the mutator runs under `pcall` on a deep copy, the copy is checked, and only a safe copy is moved into the live table. `LastGood` is refreshed after each accepted update. `GetData` does hand back the live table. The release check below protects the final save, but ProfileService's 30 s autosave would still write anything changed around `Update` before release (see the known gaps in [docs/threat-model.md](docs/threat-model.md)).
 - **Release.** `PlayerRemoving` and a `BindToClose` handler both run the same step: one more `SaveSafety.Check`, and if the data is unsafe it is replaced by a copy of `LastGood` before `Release`.
 - **What Check refuses.** NaN, infinities, functions and other unsaveable types, mixed or gapped tables, keys that are not strings or list indexes, metatables, cycles, invalid UTF-8 in values or keys, and nesting deeper than 64 levels.
 
@@ -192,7 +192,7 @@ Purchase through the backend ledger, earn batching, telemetry ingest, and the ag
 
 Strict `luau-lsp` analysis covers `game/src` only, the code that ships. Tests and scripts are format-checked and linted (StyLua, selene) and must carry the `--!strict` header, but they are not strict-analyzed. `game/vendor/` is excluded from formatting, linting and type checking.
 
-`tools/check-module-size.mjs` fails CI if any Luau, TypeScript or JavaScript module goes over 700 lines. CI (`.github/workflows/ci.yml`) has two jobs: `repo-hygiene` (module size, a secret scan, offline Markdown link check) and `luau` (the script above, run only when `game/`, `contracts/`, `tools/ci/` or the workflow changes).
+`tools/check-module-size.mjs` fails CI if any Luau, TypeScript or JavaScript module goes over 700 lines. CI (`.github/workflows/ci.yml`) has two check jobs, gated by a path-filter job (`changes`): `repo-hygiene` (module size, a secret scan, offline Markdown link check) and `luau` (the script above, run only when `game/`, `contracts/`, `tools/ci/` or the workflow changes).
 
 ## Decisions
 
