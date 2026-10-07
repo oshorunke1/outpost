@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      luau: ${{ steps.filter.outputs.luau }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            luau:
+              - 'game/**'
+              - 'contracts/**'
+              - 'tools/ci/**'
+              - '.github/workflows/ci.yml'
+
+  repo-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Module size check tests
+        run: node --test tools/check-module-size.test.mjs
+      - name: Module size check (700 lines)
+        run: node tools/check-module-size.mjs
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Markdown links (local files only)
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --offline --no-progress --root-dir "${{ github.workspace }}" './**/*.md'
+          fail: true
+
+  luau:
+    needs: changes
+    if: needs.changes.outputs.luau == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: CompeyDev/setup-rokit@v0.2.1
+        with:
+          path: game
+          token: ${{ github.token }}
+          cache: true
+      - name: Install pinned tools
+        working-directory: game
+        run: rokit install --no-trust-check
+      - name: Format, lint, strict types, tests, build, manifest
+        run: bash tools/ci/luau-check.sh
+      - name: Upload the built place
+        uses: actions/upload-artifact@v7
+        with:
+          name: Outpost-place
+          path: game/build/Outpost.rbxl
+          if-no-files-found: error
