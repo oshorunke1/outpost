@@ -1,0 +1,36 @@
+{
+	"name": "Outpost",
+	"globIgnorePaths": ["**/.gitkeep"],
+	"tree": {
+		"$className": "DataModel",
+		"ReplicatedStorage": {
+			"$className": "ReplicatedStorage",
+			"$ignoreUnknownInstances": true,
+			"Shared": { "$path": "src/ReplicatedStorage/Shared" },
+			"Classes": { "$path": "src/ReplicatedStorage/Classes" }
+		},
+		"ServerStorage": {
+			"$className": "ServerStorage",
+			"$ignoreUnknownInstances": true,
+			"Classes": { "$path": "src/ServerStorage/Classes" }
+		},
+		"ServerScriptService": {
+			"$className": "ServerScriptService",
+			"$ignoreUnknownInstances": true,
+			"ServerStart": { "$path": "src/ServerScriptService/ServerStart.server.luau" }
+		},
+		"StarterPlayer": {
+			"$className": "StarterPlayer",
+			"$ignoreUnknownInstances": true,
+			"StarterPlayerScripts": {
+				"$className": "StarterPlayerScripts",
+				"$ignoreUnknownInstances": true,
+				"ClientStart": { "$path": "src/StarterPlayer/StarterPlayerScripts/ClientStart.client.luau" }
+			}
+		},
+		"Workspace": {
+			"$className": "Workspace",
+			"$ignoreUnknownInstances": true
+		}
+	}
+}
