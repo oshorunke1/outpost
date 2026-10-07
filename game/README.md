@@ -67,3 +67,10 @@ The owner runs these by hand in Studio. Nothing here is automated.
 - [ ] Fire the same bad call 20 times in a loop. Only one dropped line appears per 5 seconds.
 
 ### Shop and HUD
+
+- [ ] Play Solo. The top left shows `Coins 0`, a `Buy Red Hat (25)` button, and an empty status line.
+- [ ] Click Buy with fewer than 25 Coins. The status says `Not enough Coins yet` and Coins do not change.
+- [ ] Collect 5 orbs (25 Coins), click Buy. The status says `Bought it!`, Coins drop to 0, and the button says `Red Hat owned`.
+- [ ] Click Buy again. The status says `You already own that` and Coins stay the same.
+- [ ] From the client command bar, fire `game.ReplicatedStorage.Remotes["Shop.Buy"]:FireServer({ ItemId = "RedHat", Price = 0 })`. Server output shows one `dropped Shop.Buy ... reason BadPayload` line and nothing is bought.
+- [ ] Fire `Shop.Buy` 30 times in a loop from the client command bar. Server output shows `reason Throttled` at most once per 5 seconds, and at most one purchase happens.
