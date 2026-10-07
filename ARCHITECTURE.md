@@ -184,7 +184,7 @@ sequenceDiagram
 
 ### Planned flows
 
-Purchase through the backend ledger, earn batching, telemetry ingest, and the agent refund with a human approval are **planned (M2)** and **planned (M3)**. Their sequence diagrams arrive with the code, following the design in [docs/superpowers/specs/2026-10-06-outpost-design.md](docs/superpowers/specs/2026-10-06-outpost-design.md) section 6.
+Purchase through the backend ledger, earn batching, telemetry ingest, and the agent refund with a human approval are **planned (M2)** and **planned (M3)**. Their sequence diagrams arrive with the code.
 
 ## Tooling and checks
 
