@@ -1,0 +1,8 @@
+# The TypeScript packages arrive in M2 (backend, contracts) and M3 (mcp, evals/runner, tools/outpost-cli).
+# M1 has no TypeScript, so none of these folders exist yet and pnpm install is not needed.
+packages:
+  - backend
+  - mcp
+  - contracts
+  - evals/runner
+  - tools/outpost-cli

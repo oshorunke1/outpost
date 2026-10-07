@@ -1,0 +1,14 @@
+{
+  "name": "outpost",
+  "private": true,
+  "description": "Server-authoritative Roblox framework, game backend, and agent-safe MCP layer in one repo",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check:size": "node tools/check-module-size.mjs",
+    "test:tools": "node --test tools/check-module-size.test.mjs"
+  }
+}

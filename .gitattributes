@@ -1,0 +1,3 @@
+* text=auto eol=lf
+# The vendored ProfileService must stay byte for byte identical to upstream, so git never touches its line endings.
+game/vendor/** -text
