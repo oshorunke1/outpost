@@ -8,6 +8,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
 
 local OrbRules = require(ReplicatedStorage.Shared.Logic.Economy.OrbRules)
+local Packets = require(ReplicatedStorage.Shared.Net.Packets)
 local DataService = require(ServerStorage.Classes.Services.DataService)
 local NetGuard = require(ServerStorage.Classes.Util.NetGuard)
 
@@ -15,6 +16,9 @@ local OrbCount = 12
 local MinSpawnRadius = 8
 local MaxSpawnRadius = 40
 local RespawnSeconds = 3
+-- The biggest OrbId the Orb.Collect packet accepts. Ids wrap back to 1 after it,
+-- so new orbs stay collectable no matter how long the server runs.
+local OrbIdCap: number = Packets.ByName["Orb.Collect"].Payload.Fields.OrbId.Max
 
 local OrbService = {}
 
@@ -29,7 +33,10 @@ local function SpawnOrb()
 	if Folder == nil then
 		return
 	end
-	NextOrbId += 1
+	-- Count up and wrap at the cap, skipping any id an orb still holds.
+	repeat
+		NextOrbId = NextOrbId % OrbIdCap + 1
+	until Orbs[NextOrbId] == nil
 	local OrbId = NextOrbId
 	local Angle = Rng:NextNumber(0, math.pi * 2)
 	local Radius = Rng:NextNumber(MinSpawnRadius, MaxSpawnRadius)
