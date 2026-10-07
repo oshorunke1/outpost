@@ -44,4 +44,15 @@ echo "== build"
 mkdir -p build
 rojo build default.project.json --output build/Outpost.rbxl
 
+echo "== manifest is current"
+lune run scripts/ExportManifest build/framework-manifest.check.json
+if ! cmp -s build/framework-manifest.check.json ../contracts/framework-manifest.json; then
+  echo "contracts/framework-manifest.json is stale. Run lune run scripts/ExportManifest in game/ and commit it."
+  diff -u ../contracts/framework-manifest.json build/framework-manifest.check.json || true
+  exit 1
+fi
+
+echo "== manifest matches its schema"
+npx --yes ajv-cli@5 validate --spec=draft2020 -s ../contracts/framework-manifest.schema.json -d ../contracts/framework-manifest.json
+
 echo "all Luau checks passed"

@@ -1,0 +1,97 @@
+{
+  "manifestVersion": 1,
+  "modules": [
+    {
+      "hasInit": true,
+      "hasStart": false,
+      "kind": "service",
+      "lineCount": 165,
+      "listens": [
+        "Profile.RequestSnapshot"
+      ],
+      "name": "DataService",
+      "path": "game/src/ServerStorage/Classes/Services/DataService.luau"
+    },
+    {
+      "hasInit": false,
+      "hasStart": true,
+      "kind": "controller",
+      "lineCount": 66,
+      "listens": [],
+      "name": "HudController",
+      "path": "game/src/ReplicatedStorage/Classes/Controllers/HudController.luau"
+    },
+    {
+      "hasInit": false,
+      "hasStart": true,
+      "kind": "controller",
+      "lineCount": 50,
+      "listens": [],
+      "name": "OrbController",
+      "path": "game/src/ReplicatedStorage/Classes/Controllers/OrbController.luau"
+    },
+    {
+      "hasInit": true,
+      "hasStart": true,
+      "kind": "service",
+      "lineCount": 111,
+      "listens": [
+        "Orb.Collect"
+      ],
+      "name": "OrbService",
+      "path": "game/src/ServerStorage/Classes/Services/OrbService.luau"
+    },
+    {
+      "hasInit": true,
+      "hasStart": false,
+      "kind": "service",
+      "lineCount": 41,
+      "listens": [
+        "Shop.Buy"
+      ],
+      "name": "ShopService",
+      "path": "game/src/ServerStorage/Classes/Services/ShopService.luau"
+    }
+  ],
+  "packets": [
+    {
+      "direction": "ClientToServer",
+      "name": "Orb.Collect",
+      "payload": "{ OrbId: integer 1..1000000 }",
+      "rateLimit": {
+        "capacity": 8,
+        "refillPerSecond": 4
+      }
+    },
+    {
+      "direction": "ClientToServer",
+      "name": "Profile.RequestSnapshot",
+      "payload": "none",
+      "rateLimit": {
+        "capacity": 2,
+        "refillPerSecond": 0.5
+      }
+    },
+    {
+      "direction": "ServerToClient",
+      "name": "Profile.Snapshot",
+      "payload": "{ Coins: integer 0..1000000000, OwnedItems: list of enum ItemId, up to 64 }",
+      "rateLimit": null
+    },
+    {
+      "direction": "ClientToServer",
+      "name": "Shop.Buy",
+      "payload": "{ ItemId: enum ItemId }",
+      "rateLimit": {
+        "capacity": 3,
+        "refillPerSecond": 1
+      }
+    },
+    {
+      "direction": "ServerToClient",
+      "name": "Shop.Result",
+      "payload": "{ ItemId: enum ItemId, Outcome: string up to 16 bytes }",
+      "rateLimit": null
+    }
+  ]
+}
