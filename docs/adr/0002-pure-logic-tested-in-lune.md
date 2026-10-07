@@ -23,5 +23,6 @@ Most of the bugs that matter in a Roblox economy are rule bugs: a limiter that r
 ## Consequences
 
 - CI runs every rule test in seconds on Linux.
+- Strict `luau-lsp analyze` covers `game/src` only, the code that ships. Tests and scripts are format-checked and linted (StyLua, selene) and carry `--!strict` headers, but they are not strict-analyzed.
 - A few small helpers (deep copy) are duplicated, since shared modules cannot require each other.
 - Roblox-only behavior still needs the manual Studio checklist. M4 may add an Open Cloud Luau Execution run.
