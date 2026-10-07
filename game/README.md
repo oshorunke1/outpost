@@ -60,4 +60,10 @@ The owner runs these by hand in Studio. Nothing here is automated.
 
 ### Orbs
 
+- [ ] Play Solo. A ring of 12 glowing yellow orbs appears around the spawn, inside `Workspace.Orbs`.
+- [ ] Walk into an orb. It disappears, a new orb appears about 3 seconds later, and the HUD Coins value goes up by 5 once the HUD from the Shop step exists.
+- [ ] In the client command bar, fire a far away pickup with `game.ReplicatedStorage.Remotes["Orb.Collect"]:FireServer({ OrbId = <an id from Workspace.Orbs that is far from you> })`. The orb stays and no Coins are paid.
+- [ ] Fire `game.ReplicatedStorage.Remotes["Orb.Collect"]:FireServer({ OrbId = "1" })` from the client command bar. The server output shows one `[NetGuard] dropped Orb.Collect ... reason BadPayload` line.
+- [ ] Fire the same bad call 20 times in a loop. Only one dropped line appears per 5 seconds.
+
 ### Shop and HUD
