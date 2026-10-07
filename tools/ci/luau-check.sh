@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs every Luau check that CI runs, in the same order, so a green run here means a green CI job.
+# Runs every check in the `luau` CI job, in the same order, so a green run here means a green `luau` job.
 # Run it from anywhere inside the repo with bash tools/ci/luau-check.sh
 set -euo pipefail
 

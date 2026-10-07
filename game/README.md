@@ -22,7 +22,7 @@ Connect the Rojo plugin in Studio to see the game. No backend and no Docker are 
 | One spec file | `lune run tests/Runner Migrator` |
 | Format | `stylua src tests scripts` |
 | Lint | `selene src tests scripts` |
-| Every CI check | `bash ../tools/ci/luau-check.sh` |
+| Every check in the `luau` CI job | `bash ../tools/ci/luau-check.sh` |
 | Build a place file | `rojo build default.project.json --output build/Outpost.rbxl` |
 
 ## Layout
