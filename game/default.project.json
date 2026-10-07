@@ -12,7 +12,11 @@
 		"ServerStorage": {
 			"$className": "ServerStorage",
 			"$ignoreUnknownInstances": true,
-			"Classes": { "$path": "src/ServerStorage/Classes" }
+			"Classes": { "$path": "src/ServerStorage/Classes" },
+			"Vendor": {
+				"$className": "Folder",
+				"ProfileService": { "$path": "vendor/ProfileService.luau" }
+			}
 		},
 		"ServerScriptService": {
 			"$className": "ServerScriptService",

@@ -36,6 +36,10 @@ Connect the Rojo plugin in Studio to see the game. No backend and no Docker are 
 | `src/ServerStorage/Classes/Util` | Server helpers such as NetGuard |
 | `vendor/` | Third-party code, never edited |
 
+## Third-party code
+
+`vendor/ProfileService.luau` is ProfileService by loleris (MadStudioRoblox), copied byte for byte from [MadStudioRoblox/ProfileService](https://github.com/MadStudioRoblox/ProfileService) at commit `d736800444eda6bf75b18397f77dfb2c8f31f60f` (the upstream file is `ProfileService.lua`; only the extension changed). It is licensed under the Apache License 2.0, included as `vendor/LICENSE-ProfileService.txt`. It is never edited here.
+
 ## Studio playtest checklist
 
 The owner runs these by hand in Studio. Nothing here is automated.
@@ -47,6 +51,11 @@ The owner runs these by hand in Studio. Nothing here is automated.
 - [ ] Put a ModuleScript that errors on require into `ServerStorage.Classes.Services` in Studio. Output shows `[Loader] <name> failed to load` and every other service still reports ready. Delete it afterwards.
 
 ### Data
+
+- [ ] Join in Play Solo. Server output shows `[DataService] using the Mock store Outpost_Players_Mock` and `[DataService] loaded <you> at schema v1 (from v1)`.
+- [ ] Your Player has a `ProfileLoaded` BindableEvent child and the attribute `ProfileLoaded = true`.
+- [ ] Stop the session. Server output shows `[DataService] released <you>` with no errors.
+- [ ] Set the attribute `ForceMockData = true` on ServerStorage in Edit mode, then Play Solo. Output still says the Mock store. Remove the attribute afterwards.
 
 ### Orbs
 
