@@ -59,6 +59,45 @@ Describe("Pricing.Decide", function()
 			CoinsAfter = 100,
 		})
 	end)
+
+	It("NaN coins give TooPoor, never Granted", function()
+		local NanResult = Pricing.Decide(Catalog, "Hat", 0 / 0, {})
+		Expect(NanResult.Outcome).ToBe("TooPoor")
+		Expect(NanResult.CoinsAfter).ToBe(0)
+	end)
+
+	It("negative coins give TooPoor, never Granted", function()
+		local NegResult = Pricing.Decide(Catalog, "Hat", -5, {})
+		Expect(NegResult.Outcome).ToBe("TooPoor")
+		Expect(NegResult.CoinsAfter).ToBe(0)
+	end)
+
+	It("infinite coins give TooPoor, never Granted", function()
+		local InfResult = Pricing.Decide(Catalog, "Hat", math.huge, {})
+		Expect(InfResult.Outcome).ToBe("TooPoor")
+		Expect(InfResult.CoinsAfter).ToBe(0)
+	end)
+
+	It("string coins give TooPoor and don't error", function()
+		local StringResult = Pricing.Decide(Catalog, "Hat", ("100" :: any) :: number, {})
+		Expect(StringResult.Outcome).ToBe("TooPoor")
+	end)
+
+	It("nil Owned is treated as not owning anything", function()
+		local NilOwned = Pricing.Decide(Catalog, "Hat", 20, (nil :: any) :: { [string]: boolean })
+		Expect(NilOwned.Outcome).ToBe("Granted")
+		Expect(NilOwned.CoinsAfter).ToBe(10)
+	end)
+
+	It("nil ItemId gives UnknownItem", function()
+		local NilId = Pricing.Decide(Catalog, (nil :: any) :: string, 100, {})
+		Expect(NilId.Outcome).ToBe("UnknownItem")
+	end)
+
+	It("number ItemId gives UnknownItem", function()
+		local NumId = Pricing.Decide(Catalog, (123 :: any) :: string, 100, {})
+		Expect(NumId.Outcome).ToBe("UnknownItem")
+	end)
 end)
 
 Describe("Pricing.CheckCatalog", function()
@@ -81,6 +120,23 @@ Describe("Pricing.CheckCatalog", function()
 		Expect((Pricing.CheckCatalog({ Hat = { DisplayName = "Hat", Price = -5 }, Cape = Catalog.Cape }, Ids))).ToBe(
 			false
 		)
+	end)
+
+	It("rejects a NaN price", function()
+		local Ids = { Hat = "Hat" }
+		local BadCatalog = { Hat = { DisplayName = "Hat", Price = 0 / 0 } }
+		Expect((Pricing.CheckCatalog(BadCatalog, Ids))).ToBe(false)
+	end)
+
+	It("rejects an infinite price", function()
+		local Ids = { Hat = "Hat" }
+		local BadCatalog = { Hat = { DisplayName = "Hat", Price = math.huge } }
+		Expect((Pricing.CheckCatalog(BadCatalog, Ids))).ToBe(false)
+	end)
+
+	It("rejects an enum value that doesn't map to itself", function()
+		local BadIds = { Hat = "Cap" }
+		Expect((Pricing.CheckCatalog(Catalog, BadIds))).ToBe(false)
 	end)
 end)
 

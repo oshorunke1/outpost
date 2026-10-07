@@ -23,7 +23,22 @@ function Pricing.Decide(Catalog: Catalog, ItemId: string, Coins: number, Owned: 
 		return { Outcome = "UnknownItem", Price = 0, CoinsAfter = Coins }
 	end
 	local Price = Entry.Price
-	if Owned[ItemId] then
+	-- Bad balances always fail closed. If Coins isn't a finite non-negative number,
+	-- we treat it as too poor and never grant anything.
+	if type(Coins) ~= "number" or Coins ~= Coins or Coins < 0 or Coins == math.huge then
+		return {
+			Outcome = "TooPoor",
+			Price = Price,
+			CoinsAfter = if type(Coins) == "number"
+					and Coins == Coins
+					and Coins >= 0
+					and Coins ~= math.huge
+				then Coins
+				else 0,
+		}
+	end
+	local OwnedTable = if type(Owned) == "table" then Owned else {}
+	if OwnedTable[ItemId] then
 		return { Outcome = "AlreadyOwned", Price = Price, CoinsAfter = Coins }
 	end
 	if Coins < Price then
@@ -35,6 +50,9 @@ end
 -- Makes sure every id has exactly one entry with a whole, positive price. A spec runs this on the real shop.
 function Pricing.CheckCatalog(Catalog: Catalog, Ids: { [string]: string }): (boolean, string?)
 	for Id in Ids do
+		if Ids[Id] ~= Id then
+			return false, `{Id} must map to itself in the enum`
+		end
 		local Entry = Catalog[Id]
 		if Entry == nil then
 			return false, `{Id} has no shop entry`
