@@ -81,16 +81,18 @@ describe('token verification refuses forged tokens', () => {
       .setSubject('op-1')
       .setIssuer('outpost')
       .setAudience(AUDIENCE)
+      .setIssuedAt()
+      .setJti('x')
       .setExpirationTime('5m')
       .sign(attacker.privateKey);
-    await expect(createTokenService(key).verifyAccessToken(forged)).rejects.toBeInstanceOf(InvalidTokenError);
+    await expect(createTokenService(key).verifyAccessToken(forged)).rejects.toThrow(/signature/);
   });
 
   test('rejects a token with the wrong issuer', async () => {
     const key = await generateKeyPair();
     const other = createTokenService(key, { issuer: 'someone-else' });
     const jwt = await other.signAccessToken({ userId: 'op-1', tokenVersion: 1 });
-    await expect(createTokenService(key).verifyAccessToken(jwt)).rejects.toBeInstanceOf(InvalidTokenError);
+    await expect(createTokenService(key).verifyAccessToken(jwt)).rejects.toThrow(/iss/);
   });
 
   test('rejects a token with the wrong audience', async () => {
@@ -100,9 +102,11 @@ describe('token verification refuses forged tokens', () => {
       .setSubject('op-1')
       .setIssuer('outpost')
       .setAudience('some-other-api')
+      .setIssuedAt()
+      .setJti('x')
       .setExpirationTime('5m')
       .sign(key.privateKey);
-    await expect(createTokenService(key).verifyAccessToken(jwt)).rejects.toBeInstanceOf(InvalidTokenError);
+    await expect(createTokenService(key).verifyAccessToken(jwt)).rejects.toThrow(/aud/);
   });
 
   test('rejects a token with the wrong typ header', async () => {
@@ -112,9 +116,11 @@ describe('token verification refuses forged tokens', () => {
       .setSubject('op-1')
       .setIssuer('outpost')
       .setAudience(AUDIENCE)
+      .setIssuedAt()
+      .setJti('x')
       .setExpirationTime('5m')
       .sign(key.privateKey);
-    await expect(createTokenService(key).verifyAccessToken(jwt)).rejects.toBeInstanceOf(InvalidTokenError);
+    await expect(createTokenService(key).verifyAccessToken(jwt)).rejects.toThrow(/typ/);
   });
 
   test('rejects a token with no kind claim', async () => {
@@ -124,11 +130,13 @@ describe('token verification refuses forged tokens', () => {
       .setSubject('op-1')
       .setIssuer('outpost')
       .setAudience(AUDIENCE)
+      .setIssuedAt()
+      .setJti('x')
       .setExpirationTime('5m')
       .sign(key.privateKey);
     const tokens = createTokenService(key);
-    await expect(tokens.verifyAccessToken(jwt)).rejects.toBeInstanceOf(InvalidTokenError);
-    await expect(tokens.verifyServiceToken(jwt)).rejects.toBeInstanceOf(InvalidTokenError);
+    await expect(tokens.verifyAccessToken(jwt)).rejects.toThrow(/not a operator token/);
+    await expect(tokens.verifyServiceToken(jwt)).rejects.toThrow(/not a service token/);
   });
 
   test('rejects a token signed by our key that has no exp', async () => {
@@ -148,8 +156,8 @@ describe('token verification refuses forged tokens', () => {
     const tokens = createTokenService(await generateKeyPair());
     const service = await tokens.signServiceToken({ clientId: 'game-server', scopes: ['game:economy'] });
     const operator = await tokens.signAccessToken({ userId: 'op-1', tokenVersion: 1 });
-    await expect(tokens.verifyAccessToken(service)).rejects.toBeInstanceOf(InvalidTokenError);
-    await expect(tokens.verifyServiceToken(operator)).rejects.toBeInstanceOf(InvalidTokenError);
+    await expect(tokens.verifyAccessToken(service)).rejects.toThrow(/not a operator token/);
+    await expect(tokens.verifyServiceToken(operator)).rejects.toThrow(/not a service token/);
   });
 });
 
