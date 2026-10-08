@@ -69,7 +69,7 @@ export async function buildApp(deps: AppDeps, options: BuildOptions = {}): Promi
   registerIdentityRoutes(app, deps);
   registerPlayerRoutes(app, { players: deps.players, guardFor });
   registerEconomyRoutes(app, { ledger: deps.ledger, guardFor });
-  registerTelemetryRoutes(app, { telemetry: deps.telemetry, clock: deps.clock, guardFor });
+  registerTelemetryRoutes(app, { telemetry: deps.telemetry, clock: deps.clock, flags: deps.flags, guardFor });
   registerFlagRoutes(app, { flags: deps.flags, guardFor });
   return app;
 }

@@ -1,8 +1,12 @@
+import { Writable } from 'node:stream';
 import { beforeEach, describe, expect, test } from 'vitest';
 import { buildApp } from '../../../src/app.js';
 import { MEMORY_CONFIG, createMemoryAppDeps } from '../../../src/memoryDeps.js';
 import type { MemoryApp } from '../../../src/memoryDeps.js';
+import { FLAG_DEFAULTS, createMemoryFlagsService } from '../../../src/modules/flags/flagsService.js';
+import type { FlagsService } from '../../../src/modules/flags/flagsService.js';
 import type { TelemetryProducer } from '../../../src/modules/telemetry/producer.js';
+import { AppError } from '../../../src/platform/errors.js';
 import type { ZodApp } from '../../../src/platform/http.js';
 import { createFakeClock } from '../../support/clock.js';
 import { bearer, gameToken } from '../../support/tokens.js';
@@ -140,5 +144,42 @@ describe('telemetry rate limit group', () => {
 
   test('the default config gives telemetry a bucket of 200 refilling 150 a second', () => {
     expect(MEMORY_CONFIG.telemetryApiLimit).toEqual({ capacity: 200, refillPerSecond: 150 });
+  });
+});
+
+// S4-F17: TelemetryEnabled switches the route off, and a flags outage never switches it off.
+describe('telemetry and the TelemetryEnabled flag', () => {
+  const batch = (now: number) => ({ events: [{ name: 'player_join', ts: now }, { name: 'orb_collected', ts: now }] });
+
+  test('with the flag off it answers 202, accepts nothing, counts every event as dropped and publishes nothing', async () => {
+    const off = await createMemoryAppDeps({ clock, overrides: { flags: createMemoryFlagsService({ ...FLAG_DEFAULTS, TelemetryEnabled: false }) } });
+    const offApp = await buildApp(off.deps);
+    const response = await offApp.inject({ method: 'POST', url: '/v1/telemetry/batch', headers: bearer(await gameToken(off.deps.tokens)), payload: batch(clock.now()) });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({ accepted: 0, dropped: 2 });
+    expect(off.telemetry.published).toEqual([]);
+  });
+
+  test('when flags are unavailable telemetry fails open, keeps accepting and logs it', async () => {
+    const lines: string[] = [];
+    const sink = new Writable({
+      write(chunk: Buffer, _encoding, done) {
+        lines.push(chunk.toString());
+        done();
+      },
+    });
+    const down: FlagsService = { list: () => Promise.reject(new AppError(503, 'flags_unavailable', 'Flags are temporarily unavailable')) };
+    const failing = await createMemoryAppDeps({ clock, overrides: { flags: down } });
+    const failingApp = await buildApp({ ...failing.deps, config: { ...MEMORY_CONFIG, logLevel: 'info' } }, { logStream: sink });
+    const response = await failingApp.inject({
+      method: 'POST',
+      url: '/v1/telemetry/batch',
+      headers: bearer(await gameToken(failing.deps.tokens)),
+      payload: batch(clock.now()),
+    });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({ accepted: 2, dropped: 0 });
+    expect(failing.telemetry.published).toHaveLength(2);
+    expect(lines.join('')).toContain('flags unavailable; telemetry stays on');
   });
 });

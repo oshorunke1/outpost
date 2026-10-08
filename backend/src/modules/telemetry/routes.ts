@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import type { Clock } from '../../platform/clock.js';
-import { AppError } from '../../platform/errors.js';
+import { AppError, summarizeCause } from '../../platform/errors.js';
 import { errorBody } from '../../platform/http.js';
 import type { ZodApp } from '../../platform/http.js';
 import { requireService } from '../identity/guards.js';
+import type { FlagsService } from '../flags/flagsService.js';
 import type { GuardFor } from '../identity/guards.js';
 import type { TelemetryProducer } from './producer.js';
 import { splitByClock, telemetryBatchSchema } from './schema.js';
@@ -14,7 +15,19 @@ export const TELEMETRY_BODY_LIMIT_BYTES = 512 * 1024;
 export interface TelemetryRouteDeps {
   telemetry: TelemetryProducer;
   clock: Clock;
+  flags: FlagsService;
   guardFor: GuardFor;
+}
+
+// TelemetryEnabled off means every event is dropped. If flags cannot be read at all, telemetry
+// fails open and stays on, because losing the flag must not also lose the data.
+async function telemetryEnabled(deps: TelemetryRouteDeps, log: { warn(details: object, message: string): void }): Promise<boolean> {
+  try {
+    return (await deps.flags.list()).TelemetryEnabled !== false;
+  } catch (error) {
+    log.warn({ cause: summarizeCause(error) }, 'flags unavailable; telemetry stays on');
+    return true;
+  }
 }
 
 export function registerTelemetryRoutes(app: ZodApp, deps: TelemetryRouteDeps): void {
@@ -42,6 +55,9 @@ export function registerTelemetryRoutes(app: ZodApp, deps: TelemetryRouteDeps): 
     },
     async (request, reply) => {
       const principal = requireService(request);
+      if (!(await telemetryEnabled(deps, request.log))) {
+        return reply.code(202).send({ accepted: 0, dropped: request.body.events.length });
+      }
       const { kept, dropped } = splitByClock(request.body.events, deps.clock.now());
       try {
         if (kept.length > 0) await deps.telemetry.publish(principal.clientId, kept);

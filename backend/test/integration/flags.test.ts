@@ -9,6 +9,7 @@ import { systemClock } from '../../src/platform/clock.js';
 import type { Db, RowDataPacket } from '../../src/platform/db.js';
 import { createFakeClock } from '../support/clock.js';
 import { bearer, gameToken } from '../support/tokens.js';
+import { STREAM_KEY } from '../../src/modules/telemetry/producer.js';
 import { createIntegrationApp } from './support/app.js';
 import { createIntegrationContext } from './support/context.js';
 import type { IntegrationContext } from './support/context.js';
@@ -150,7 +151,7 @@ describe('flags on MySQL', () => {
     expect(logger.lines).toEqual([]); // the error handler logs a 5xx with its cause
   });
 
-  test('the composed app serves flags from MySQL', async () => {
+  test('the composed app serves flags from MySQL and TelemetryEnabled false turns telemetry off', async () => {
     const hasher = createArgon2Hasher(FAST_ARGON2);
     await createMysqlServiceClientRepo(ctx.db, systemClock).upsert({ clientId: GAME_CLIENT_ID, secretHash: await makeDummyHash(hasher), scopes: GAME_SCOPES });
     await ctx.db.query("UPDATE flags SET flag_value = CAST('false' AS JSON) WHERE flag_key = 'TelemetryEnabled'");
@@ -161,6 +162,11 @@ describe('flags on MySQL', () => {
       expect(flags.statusCode).toBe(200);
       expect(flags.json()).toEqual({ flags: { ...FLAG_DEFAULTS, TelemetryEnabled: false } });
 
+      const before = await ctx.redis.xlen(STREAM_KEY);
+      const batch = await app.inject({ method: 'POST', url: '/v1/telemetry/batch', headers: auth, payload: { events: [{ name: 'player_join', ts: Date.now() }] } });
+      expect(batch.statusCode).toBe(202);
+      expect(batch.json()).toEqual({ accepted: 0, dropped: 1 });
+      expect(await ctx.redis.xlen(STREAM_KEY)).toBe(before);
     } finally {
       await app.close();
     }
