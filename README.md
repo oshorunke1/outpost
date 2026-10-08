@@ -1,12 +1,12 @@
 # Outpost
 
-A server-authoritative Roblox game framework, the game backend it talks to, and an agent-safe operations layer (MCP) on top, all in one repo. The sample game, "Orbs" (collect orbs, earn Coins, buy a cosmetic), exists only to exercise the framework. There is no live game and no player count.
+A server-authoritative Luau client framework, the TypeScript backend it talks to, and an agent-safe operations layer (MCP) on top, all in one repo. The sample app, "Orbs" (collect orbs, earn Coins, buy a cosmetic), exists only to exercise the framework. Nothing here runs in production and there is no user count.
 
 Only the framework (`game/`, milestone M1) is built. The backend is planned (M2) and the MCP layer is planned (M3). The diagram shows dotted arrows for the parts that do not exist yet.
 
 ```mermaid
 flowchart LR
-  Player(["Roblox player"]) -->|RemoteEvents| Game["game/ (built)"]
+  Player(["Client"]) -->|RemoteEvents| Game["game/ (built)"]
   Game -.->|"HTTPS, planned (M2)"| Backend["backend/ (planned)"]
   Agent(["AI agent"]) -.->|"MCP, planned (M3)"| MCP["mcp/ (planned)"]
   MCP -.-> Backend
@@ -33,7 +33,7 @@ lune run tests/Runner
 rojo serve
 ```
 
-`lune run tests/Runner` runs every Lune spec and ends with a line like `140 passed, 0 failed, 14 spec files`. Connect the Rojo plugin in Studio and press Play to try the game. M1 needs no Docker and no backend.
+`lune run tests/Runner` runs every Lune spec and ends with a line like `140 passed, 0 failed, 14 spec files`. Connect the Rojo plugin in Studio and press Play to try the sample. M1 needs no Docker and no backend.
 
 From the repo root, `bash tools/ci/luau-check.sh` runs every check in the `luau` CI job. The `repo-hygiene` job's module size checks run locally with `npm run check:size` and `node --test tools/check-module-size.test.mjs` (also `npm run test:tools`). Its secret scan (gitleaks) and link check (lychee) run in CI only.
 
@@ -41,7 +41,7 @@ The full-system quickstart (`docker compose up -d && pnpm demo`) arrives with M2
 
 ## What to look at first
 
-- **Roblox reviewers:** [NetGuard](game/src/ServerStorage/Classes/Util/NetGuard.luau), [Packets.luau](game/src/ReplicatedStorage/Shared/Net/Packets.luau), [PacketGate](game/src/ReplicatedStorage/Shared/Logic/Net/PacketGate.luau), [DataService](game/src/ServerStorage/Classes/Services/DataService.luau) with [Migrator](game/src/ReplicatedStorage/Shared/Logic/Data/Migrator.luau), and [ADR 0005](docs/adr/0005-server-authoritative-remotes.md).
+- **Luau reviewers:** [NetGuard](game/src/ServerStorage/Classes/Util/NetGuard.luau), [Packets.luau](game/src/ReplicatedStorage/Shared/Net/Packets.luau), [PacketGate](game/src/ReplicatedStorage/Shared/Logic/Net/PacketGate.luau), [DataService](game/src/ServerStorage/Classes/Services/DataService.luau) with [Migrator](game/src/ReplicatedStorage/Shared/Logic/Data/Migrator.luau), and [ADR 0005](docs/adr/0005-server-authoritative-remotes.md).
 - **Backend reviewers:** planned (M2). The ledger, refresh-token reuse detection and ADR 0008 land there.
 - **AI and agent reviewers:** planned (M3). The policy tier map, approvals, the untrusted-text wrapper and the eval report land there. Today, [the framework manifest](contracts/framework-manifest.json) is what the MCP server will read.
 - **Architects:** [ARCHITECTURE.md](ARCHITECTURE.md), [the threat model](docs/threat-model.md), and [the ADRs](docs/adr/).
