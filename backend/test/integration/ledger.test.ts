@@ -18,6 +18,10 @@ describe('ledger invariants on MySQL', () => {
   beforeAll(async () => {
     ctx = await createIntegrationContext();
     ledger = createLedgerService(ctx.db, systemClock);
+    // InnoDB only counts deadlocks while this metric is on. The harness has already checked that
+    // ctx points at a loopback test server, so switching a global monitor on is safe here.
+    const [metric] = await ctx.db.query<RowDataPacket[]>("SELECT STATUS FROM information_schema.INNODB_METRICS WHERE NAME = 'lock_deadlocks'");
+    if (metric[0]?.STATUS !== 'enabled') await ctx.db.query("SET GLOBAL innodb_monitor_enable = 'lock_deadlocks'");
   });
   afterAll(async () => {
     await ctx.close();
@@ -34,6 +38,13 @@ describe('ledger invariants on MySQL', () => {
   const count = async (table: 'ledger_transactions' | 'ledger_entries') => {
     const [rows] = await ctx.db.query<RowDataPacket[]>('SELECT COUNT(*) AS n FROM ??', [table]);
     return Number(rows[0]?.n);
+  };
+  // The server-wide InnoDB deadlock counter. Integration files run one at a time, so a delta
+  // across one test is that test's deadlocks, including ones withTransaction retried away.
+  const deadlocks = async () => {
+    const [rows] = await ctx.db.query<RowDataPacket[]>("SELECT COUNT AS n FROM information_schema.INNODB_METRICS WHERE NAME = 'lock_deadlocks' AND STATUS = 'enabled'");
+    if (!rows[0]) throw new Error('the lock_deadlocks metric is not enabled');
+    return Number(rows[0].n);
   };
   const balance = async (userId: number) => {
     const [rows] = await ctx.db.query<RowDataPacket[]>('SELECT balance FROM account_balances WHERE account_id = ?', [`player:${userId}`]);
@@ -193,11 +204,36 @@ describe('ledger invariants on MySQL', () => {
           return players.join(userId);
       }
     });
+    const deadlocksBefore = await deadlocks();
     const results = await Promise.allSettled(operations);
     const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected').map((r) => r.reason as { code?: unknown; statusCode?: unknown });
     // Only a clean refusal is allowed; a deadlock that escaped the retry would show up here.
     for (const failure of failures) expect(failure).toMatchObject({ statusCode: 422, code: 'insufficient_funds' });
+    // And none were retried away either: the lock order means InnoDB never picks a victim.
+    expect(await deadlocks()).toBe(deadlocksBefore);
     await expectReconciled();
+  });
+
+  // Regression (Task 15): a locking idempotency re-read took gap locks on the missing key, so
+  // different players with neighbouring keys deadlocked on insert. The plain read never does.
+  test('100 concurrent earns for 20 different players with ascending same-prefix keys all land with zero deadlocks', async () => {
+    const userIds: number[] = [];
+    for (let i = 0; i < 20; i += 1) userIds.push(await newPlayer());
+    const prefix = `job-x:${randomUUID().slice(0, 8)}`;
+    const deadlocksBefore = await deadlocks();
+    const results = await Promise.allSettled(
+      Array.from({ length: 100 }, (_, n) =>
+        ledger.submit({
+          principal: GAME,
+          idempotencyKey: `${prefix}:${String(n).padStart(4, '0')}`,
+          request: { kind: 'earn', userId: userIds[n % userIds.length] ?? 0, amount: 1, reason: 'orbs' },
+        }),
+      ),
+    );
+    const deadlockDelta = (await deadlocks()) - deadlocksBefore;
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected').map((r) => (r.reason as { code?: unknown }).code);
+    expect({ rejected, deadlockDelta }).toEqual({ rejected: [], deadlockDelta: 0 });
+    for (const userId of userIds) expect(await balance(userId)).toBe(5);
   });
 
   // Invariant 5
@@ -346,11 +382,11 @@ describe('ledger invariants on MySQL', () => {
     const crown = await ledger.submit({ principal: GAME, idempotencyKey: key(), request: { kind: 'purchase', userId, itemId: 'GoldCrown' } });
     // Both rows can share a millisecond, so compare as a set.
     expect((await ledger.unfulfilledPurchases(userId)).map((p) => p.itemId).sort()).toEqual(['GoldCrown', 'RedHat']);
-    await ledger.markFulfilled(hat.result.transactionId);
-    await ledger.markFulfilled(hat.result.transactionId); // a repeat ack is harmless
+    await ledger.markFulfilled(hat.result.transactionId, GAME);
+    await ledger.markFulfilled(hat.result.transactionId, GAME); // a repeat ack is harmless
     await ledger.refund({ principal: GAME, idempotencyKey: key(), transactionId: crown.result.transactionId });
     expect(await ledger.unfulfilledPurchases(userId)).toEqual([]);
-    await expect(ledger.markFulfilled(randomUUID())).rejects.toMatchObject({ statusCode: 404, code: 'purchase_not_found' });
+    await expect(ledger.markFulfilled(randomUUID(), GAME)).rejects.toMatchObject({ statusCode: 404, code: 'purchase_not_found' });
   });
 
   // Last, so it reconciles everything every test above wrote.

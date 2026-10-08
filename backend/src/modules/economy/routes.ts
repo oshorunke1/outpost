@@ -15,7 +15,7 @@ const transactionBody = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('purchase'), userId: userIdBody, itemId: z.enum(ITEM_IDS) }).strict(),
 ]);
 
-export const IDEMPOTENCY_KEY = /^[A-Za-z0-9:_-]{8,128}$/;
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9:_-]{8,128}$/;
 
 // Loose, so the Authorization header the guard already read is not stripped from the request.
 const idempotencyHeaders = z.looseObject({ 'idempotency-key': z.string().regex(IDEMPOTENCY_KEY) });

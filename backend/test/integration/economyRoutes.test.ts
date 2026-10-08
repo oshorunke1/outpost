@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import type { LedgerService } from '../../src/modules/economy/ledger.js';
 import { FAST_ARGON2, createArgon2Hasher, makeDummyHash } from '../../src/modules/identity/crypto/password.js';
 import type { TokenService } from '../../src/modules/identity/crypto/tokenService.js';
 import { createMysqlServiceClientRepo } from '../../src/modules/identity/repos/serviceClientRepo.js';
@@ -18,12 +19,14 @@ describe('economy over HTTP on MySQL', () => {
   let ctx: IntegrationContext;
   let app: ZodApp;
   let tokens: TokenService;
+  let ledger: LedgerService;
   let auth: { authorization: string };
   beforeAll(async () => {
     ctx = await createIntegrationContext();
     const built = await createIntegrationApp(ctx);
     app = built.app;
     tokens = built.deps.tokens;
+    ledger = built.deps.ledger;
     // MySQL starts with no service clients, so register both before signing their tokens. The
     // second one has game:economy too, but it is a different caller.
     const hasher = createArgon2Hasher(FAST_ARGON2);
@@ -119,6 +122,18 @@ describe('economy over HTTP on MySQL', () => {
     const pending = await app.inject({ method: 'GET', url: '/v1/players/1004/purchases?unfulfilled=1', headers: auth });
     expect(pending.json()).toMatchObject({ purchases: [{ transactionId: id }] });
     expect((await app.inject({ method: 'POST', url: `/v1/economy/transactions/${id}/fulfilled`, headers: auth })).statusCode).toBe(204);
+  });
+
+  test('only purchases can be fulfilled: an earn id and a refund id are both 404 purchase_not_found', async () => {
+    await join(1007);
+    const earned = await transact('fulfil-earn-1', { kind: 'earn', userId: 1007, amount: 25, reason: 'orbs' });
+    const bought = await transact('fulfil-buy-01', { kind: 'purchase', userId: 1007, itemId: 'RedHat' });
+    // Refunds have no route yet, so this one goes straight through the composed ledger.
+    const refunded = await ledger.refund({ principal: `svc:${GAME_CLIENT_ID}`, idempotencyKey: 'fulfil-refund-1', transactionId: bought.json<{ transactionId: string }>().transactionId });
+    for (const id of [earned.json<{ transactionId: string }>().transactionId, refunded.result.transactionId]) {
+      const response = await app.inject({ method: 'POST', url: `/v1/economy/transactions/${id}/fulfilled`, headers: auth });
+      expect({ id, status: response.statusCode, error: response.json<{ error: string }>().error }).toEqual({ id, status: 404, error: 'purchase_not_found' });
+    }
   });
 
   test('a lost COMMIT is 503 ledger_unavailable with retry-after, and the composition root logs it', async () => {
