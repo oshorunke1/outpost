@@ -8,9 +8,10 @@ import { CommitOutcomeUnknownError, isDuplicateKey } from '../../src/platform/db
 import type { RowDataPacket } from '../../src/platform/db.js';
 import { createIntegrationContext } from './support/context.js';
 import type { IntegrationContext } from './support/context.js';
-import { beforeQueryDb, failingCommitDb } from './support/failingDb.js';
+import { beforeQueryDb, failingCommitDb, rejectingQueryDb } from './support/failingDb.js';
 
 const DAY_MS = 24 * 60 * 60_000;
+const silent = { error: () => undefined };
 
 describe('telemetry worker on Redis and MySQL', () => {
   let ctx: IntegrationContext;
@@ -30,7 +31,7 @@ describe('telemetry worker on Redis and MySQL', () => {
   });
 
   const worker = (consumer: string, options: Partial<WorkerDeps> = {}) =>
-    createTelemetryWorker({ redis: ctx.redis, db: ctx.db, consumer, clock: systemClock, blockMs: 50, claimIdleMs: 60_000, ...options });
+    createTelemetryWorker({ redis: ctx.redis, db: ctx.db, consumer, clock: systemClock, logger: silent, blockMs: 50, claimIdleMs: 60_000, ...options });
   const publish = (count: number) =>
     createRedisTelemetryProducer(ctx.redis).publish(
       'game-server',
@@ -56,7 +57,7 @@ describe('telemetry worker on Redis and MySQL', () => {
     const a = worker('a');
     await a.ensureGroup();
     await publish(3);
-    await expect(a.runOnce()).resolves.toEqual({ applied: 3, duplicates: 0, malformed: 0 });
+    await expect(a.runOnce()).resolves.toEqual({ applied: 3, duplicates: 0, malformed: 0, deadLettered: 0 });
     expect(await totals()).toEqual({ count: 3, sum: 15 });
     expect(await countRows('telemetry_processed')).toBe(3);
     expect(await a.pending()).toBe(0);
@@ -70,7 +71,7 @@ describe('telemetry worker on Redis and MySQL', () => {
       { name: 'purchase_result', ts, dims: { outcome: 'Granted', itemId: 'RedHat' } },
       { name: 'purchase_result', ts: ts + 10_000, dims: { itemId: 'RedHat', outcome: 'Granted' } },
     ]);
-    await expect(a.runOnce()).resolves.toEqual({ applied: 2, duplicates: 0, malformed: 0 });
+    await expect(a.runOnce()).resolves.toEqual({ applied: 2, duplicates: 0, malformed: 0, deadLettered: 0 });
     const [rows] = await ctx.db.query<RowDataPacket[]>('SELECT metric, bucket_start, dims, dims_hash, event_count, value_sum FROM telemetry_rollups');
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ metric: 'purchase_result', dims: { itemId: 'RedHat', outcome: 'Granted' }, event_count: 2, value_sum: 0 });
@@ -84,7 +85,7 @@ describe('telemetry worker on Redis and MySQL', () => {
     await publish(2);
     const entries = await a.readNew();
     await a.process(entries);
-    await expect(a.process(entries)).resolves.toEqual({ applied: 0, duplicates: 2, malformed: 0 });
+    await expect(a.process(entries)).resolves.toEqual({ applied: 0, duplicates: 2, malformed: 0, deadLettered: 0 });
     expect(await totals()).toEqual({ count: 2, sum: 10 });
   });
 
@@ -96,7 +97,7 @@ describe('telemetry worker on Redis and MySQL', () => {
     const results = await Promise.all([a.process(entries), worker('b').process(entries)]);
     expect(results.reduce((n, r) => n + r.applied, 0)).toBe(4);
     expect(results.reduce((n, r) => n + r.duplicates, 0)).toBe(4);
-    await expect(a.process(entries)).resolves.toEqual({ applied: 0, duplicates: 4, malformed: 0 });
+    await expect(a.process(entries)).resolves.toEqual({ applied: 0, duplicates: 4, malformed: 0, deadLettered: 0 });
     expect(await totals()).toEqual({ count: 4, sum: 20 });
   });
 
@@ -110,12 +111,13 @@ describe('telemetry worker on Redis and MySQL', () => {
     const racing = createTelemetryWorker({
       redis: ctx.redis,
       db: beforeQueryDb(ctx.db, /^INSERT INTO telemetry_processed/, async () => {
-        await expect(worker('b').process(entries)).resolves.toEqual({ applied: 3, duplicates: 0, malformed: 0 });
+        await expect(worker('b').process(entries)).resolves.toEqual({ applied: 3, duplicates: 0, malformed: 0, deadLettered: 0 });
       }),
       consumer: 'a',
       clock: systemClock,
+      logger: silent,
     });
-    await expect(racing.process(entries)).resolves.toEqual({ applied: 0, duplicates: 3, malformed: 0 });
+    await expect(racing.process(entries)).resolves.toEqual({ applied: 0, duplicates: 3, malformed: 0, deadLettered: 0 });
     expect(await totals()).toEqual({ count: 3, sum: 15 });
     expect(await a.pending()).toBe(0);
   });
@@ -134,7 +136,7 @@ describe('telemetry worker on Redis and MySQL', () => {
     await publish(4);
     const entries = await a.readNew();
     const ids = entries.map((entry) => entry.id);
-    await expect(collidingWorker([ids[0] ?? '', ids[1] ?? '']).process(entries)).resolves.toEqual({ applied: 2, duplicates: 2, malformed: 0 });
+    await expect(collidingWorker([ids[0] ?? '', ids[1] ?? '']).process(entries)).resolves.toEqual({ applied: 2, duplicates: 2, malformed: 0, deadLettered: 0 });
     expect(await totals()).toEqual({ count: 2, sum: 10 }); // the two committed elsewhere are not counted here
     expect(await countRows('telemetry_processed')).toBe(4);
     expect(await a.pending()).toBe(0);
@@ -163,7 +165,7 @@ describe('telemetry worker on Redis and MySQL', () => {
     expect(await a.pending()).toBe(3);
     expect(await countRows('telemetry_rollups')).toBe(0);
     expect(await countRows('telemetry_processed')).toBe(0);
-    await expect(worker('rescuer', { claimIdleMs: 0 }).runOnce()).resolves.toEqual({ applied: 3, duplicates: 0, malformed: 0 });
+    await expect(worker('rescuer', { claimIdleMs: 0 }).runOnce()).resolves.toEqual({ applied: 3, duplicates: 0, malformed: 0, deadLettered: 0 });
     expect(await totals()).toEqual({ count: 3, sum: 15 });
   });
 
@@ -173,7 +175,7 @@ describe('telemetry worker on Redis and MySQL', () => {
     await publish(2);
     expect(await dead.readNew()).toHaveLength(2); // read, then "crash" before processing
     const rescuer = worker('rescuer', { claimIdleMs: 0 });
-    await expect(rescuer.runOnce()).resolves.toEqual({ applied: 2, duplicates: 0, malformed: 0 });
+    await expect(rescuer.runOnce()).resolves.toEqual({ applied: 2, duplicates: 0, malformed: 0, deadLettered: 0 });
     expect(await rescuer.pending()).toBe(0);
   });
 
@@ -193,16 +195,58 @@ describe('telemetry worker on Redis and MySQL', () => {
     // Schema valid, but year 10000 does not fit a DATETIME bucket_start (I1).
     await ctx.redis.xadd(STREAM_KEY, '*', 'e', JSON.stringify({ name: 'orb_collected', ts: 253402300800000, value: 1 }));
     await publish(1);
-    await expect(a.runOnce()).resolves.toEqual({ applied: 1, duplicates: 0, malformed: 2 });
+    await expect(a.runOnce()).resolves.toEqual({ applied: 1, duplicates: 0, malformed: 2, deadLettered: 0 });
     expect(await totals()).toEqual({ count: 1, sum: 5 });
     expect(await a.pending()).toBe(0);
+  });
+
+  // I1: a schema-valid entry MySQL refuses. Before its fifth delivery it only fails the reclaimed
+  // batch, which runs in its own transaction, so new reads still commit. At five deliveries every
+  // reclaimed entry is tried alone; the good ones apply and the poison is acked as a dead letter.
+  test('a poison entry never blocks new data and is dead-lettered at five deliveries', async () => {
+    const logged: { details: object; message: string }[] = [];
+    const logger = { error: (details: object, message: string) => void logged.push({ details, message }) };
+    const dead = worker('dead');
+    await dead.ensureGroup();
+    await createRedisTelemetryProducer(ctx.redis).publish('game-server', [{ name: 'breaker_state', ts: Date.now(), dims: { state: 'Open' } }]);
+    await publish(2);
+    const [poison] = await dead.readNew(); // delivery 1, then the consumer "crashes"
+    const poisonDb = rejectingQueryDb(ctx.db, (sql, values) => sql.startsWith('INSERT INTO telemetry_rollups') && JSON.stringify(values).includes('breaker_state'));
+    const rescuer = worker('rescuer', { db: poisonDb, claimIdleMs: 0, logger });
+    for (let delivery = 2; delivery <= 4; delivery += 1) {
+      await publish(1);
+      await expect(rescuer.runOnce()).resolves.toEqual({ applied: 1, duplicates: 0, malformed: 0, deadLettered: 0 });
+      expect(await rescuer.pending()).toBe(3);
+    }
+    await expect(rescuer.runOnce()).resolves.toEqual({ applied: 2, duplicates: 0, malformed: 0, deadLettered: 1 });
+    expect(await rescuer.pending()).toBe(0);
+    expect(await totals()).toEqual({ count: 5, sum: 25 });
+    const [breakerRows] = await ctx.db.query<RowDataPacket[]>("SELECT COUNT(*) AS n FROM telemetry_rollups WHERE metric = 'breaker_state'");
+    expect(Number(breakerRows[0]?.n)).toBe(0);
+    const deadLetters = logged.filter((line) => line.message.includes('dead_letter'));
+    expect(deadLetters).toHaveLength(1);
+    expect(deadLetters[0]?.details).toMatchObject({ entryId: poison?.id, deliveries: 5, code: 'ER_TRUNCATED_WRONG_VALUE' });
+    expect(logged.filter((line) => line.message.includes('reclaimed'))).toHaveLength(3); // the three failed batch tries
+  });
+
+  test('a database outage never dead-letters, however many deliveries an entry has', async () => {
+    const dead = worker('dead');
+    await dead.ensureGroup();
+    await publish(1);
+    await dead.readNew();
+    const down = worker('rescuer', { db: failingCommitDb(ctx.db, 'before-apply'), claimIdleMs: 0 });
+    for (let delivery = 2; delivery <= 6; delivery += 1) {
+      await expect(down.runOnce()).resolves.toEqual({ applied: 0, duplicates: 0, malformed: 0, deadLettered: 0 });
+    }
+    expect(await down.pending()).toBe(1);
+    await expect(worker('rescuer', { claimIdleMs: 0 }).runOnce()).resolves.toEqual({ applied: 1, duplicates: 0, malformed: 0, deadLettered: 0 });
   });
 
   test('stream deleted under the worker: it recreates the group and keeps going', async () => {
     const a = worker('a');
     await a.ensureGroup();
     await ctx.redis.del(STREAM_KEY);
-    await expect(a.runOnce()).resolves.toEqual({ applied: 0, duplicates: 0, malformed: 0 });
+    await expect(a.runOnce()).resolves.toEqual({ applied: 0, duplicates: 0, malformed: 0, deadLettered: 0 });
     const groups = (await ctx.redis.xinfo('GROUPS', STREAM_KEY)) as unknown[][];
     expect(groups.map((g) => g[1])).toEqual([GROUP]);
     await publish(1);
@@ -277,12 +321,12 @@ describe('telemetry worker on Redis and MySQL', () => {
     // committing more of the same ids), runOnce rejects, nothing was acked, and the entries come
     // back through XAUTOCLAIM. Any other error fails the test.
     const drain = async (w: (typeof workers)[number]): Promise<ProcessResult> => {
-      const sum: ProcessResult = { applied: 0, duplicates: 0, malformed: 0 };
+      const sum: ProcessResult = { applied: 0, duplicates: 0, malformed: 0, deadLettered: 0 };
       let idle = 0;
       while (idle < 3 && Date.now() < deadline) {
         const r = await w.runOnce().catch((error: unknown) => {
           if (!isDuplicateKey(error)) throw error;
-          return { applied: 0, duplicates: 0, malformed: 0, collided: true };
+          return { applied: 0, duplicates: 0, malformed: 0, deadLettered: 0, collided: true };
         });
         if ('collided' in r) {
           idle = 0;
@@ -291,14 +335,15 @@ describe('telemetry worker on Redis and MySQL', () => {
         sum.applied += r.applied;
         sum.duplicates += r.duplicates;
         sum.malformed += r.malformed;
-        idle = r.applied + r.duplicates + r.malformed === 0 && (await w.pending()) === 0 ? idle + 1 : 0;
+        sum.deadLettered += r.deadLettered;
+        idle = r.applied + r.duplicates + r.malformed + r.deadLettered === 0 && (await w.pending()) === 0 ? idle + 1 : 0;
       }
       return sum;
     };
     const results = await Promise.all(workers.map(drain));
     const deadlockDelta = (await deadlocks()) - before;
     expect(results.reduce((n, r) => n + r.applied, 0)).toBe(2000);
-    expect(results.reduce((n, r) => n + r.malformed, 0)).toBe(0);
+    expect(results.reduce((n, r) => n + r.malformed + r.deadLettered, 0)).toBe(0);
     expect(results.reduce((n, r) => n + r.duplicates, 0)).toBeGreaterThan(0); // the reclaim race really happened
     expect(await totals()).toEqual({ count: 2000, sum: 10_000 });
     expect(await countRows('telemetry_processed')).toBe(2000);

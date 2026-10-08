@@ -1,6 +1,6 @@
 import type { Clock } from '../../platform/clock.js';
 import { isDuplicateKey, withTransaction } from '../../platform/db.js';
-import type { Db, ResultSetHeader, RowDataPacket } from '../../platform/db.js';
+import type { Db, ResultSetHeader, RowDataPacket, TransactionLogger } from '../../platform/db.js';
 import type { Redis } from '../../platform/redis.js';
 import { STREAM_KEY } from './producer.js';
 import { rollUp } from './rollup.js';
@@ -21,15 +21,21 @@ export const DUP_ATTEMPTS = 3;
 // an old redelivery still applies.
 export const MAX_STORABLE_TS = Date.UTC(10000, 0, 1) - 1;
 
+// A reclaimed entry handed out this many times is tried on its own, and dead-lettered (acked and
+// counted, with a log line) if MySQL refuses it as data (I1).
+export const MAX_DELIVERIES = 5;
+
 export interface StreamEntry {
   id: string;
   event: TelemetryEvent | null; // null when the payload is missing or invalid
+  deliveries?: number; // set by reclaim: how many times the group has handed this entry out
 }
 
 export interface ProcessResult {
   applied: number;
   duplicates: number;
   malformed: number;
+  deadLettered: number; // the dead_letter result: acked without being applied, see MAX_DELIVERIES
 }
 
 export interface WorkerDeps {
@@ -37,6 +43,7 @@ export interface WorkerDeps {
   db: Db;
   consumer: string;
   clock: Clock;
+  logger: TransactionLogger; // told about failed reclaimed batches, dead letters and failed commits
   batchSize?: number;
   blockMs?: number;
   claimIdleMs?: number;
@@ -95,6 +102,28 @@ export function compareStreamIds(a: string, b: string): number {
   return diff < 0n ? -1 : diff > 0n ? 1 : 0;
 }
 
+// MySQL refused the data itself (SQLSTATE class 22, a data exception such as a value it cannot
+// store). Trying again can never succeed. A lock or duplicate-key race, a read-only failover or a
+// dropped connection is not one of these, so an outage never dead-letters anything.
+function isDataRejection(error: unknown): boolean {
+  const sqlState = typeof error === 'object' && error !== null ? (error as { sqlState?: unknown }).sqlState : undefined;
+  return typeof sqlState === 'string' && sqlState.startsWith('22');
+}
+
+function errorFields(error: unknown): { err: string; code?: string } {
+  const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
+  return { err: error instanceof Error ? error.message : String(error), ...(typeof code === 'string' ? { code } : {}) };
+}
+
+const empty = (): ProcessResult => ({ applied: 0, duplicates: 0, malformed: 0, deadLettered: 0 });
+
+function addInto(total: ProcessResult, part: ProcessResult): void {
+  total.applied += part.applied;
+  total.duplicates += part.duplicates;
+  total.malformed += part.malformed;
+  total.deadLettered += part.deadLettered;
+}
+
 const isNoGroup = (error: unknown) => error instanceof Error && error.message.startsWith('NOGROUP');
 
 // Telemetry is at-least-once end to end: the producer's XADDs are not atomic with the request, and
@@ -102,8 +131,16 @@ const isNoGroup = (error: unknown) => error instanceof Error && error.message.st
 // stream entries. It reads with a consumer group, rolls each batch into minute buckets, records
 // every entry id in the same MySQL transaction, and only then XACKs. A crash between commit and
 // ack means redelivery, and the recorded ids turn that redelivery into a no-op.
+//
+// Reclaimed entries and new reads go through separate transactions, so a reclaimed batch that
+// keeps failing never holds back new data. An entry that keeps coming back is dead-lettered once
+// it has been handed out MAX_DELIVERIES times and MySQL refuses it on its own.
+//
+// Known limit (M1, documented for Task 33): processed ids are pruned after 24 hours. An entry
+// that was committed but never acked and stays pending longer than that (every worker down for a
+// day) would be counted again when it is finally redelivered.
 export function createTelemetryWorker(deps: WorkerDeps): TelemetryWorker {
-  const { redis, db, consumer, clock } = deps;
+  const { redis, db, consumer, clock, logger } = deps;
   const batchSize = deps.batchSize ?? 200;
   const blockMs = deps.blockMs ?? 5_000;
   const claimIdleMs = deps.claimIdleMs ?? 60_000;
@@ -145,10 +182,10 @@ export function createTelemetryWorker(deps: WorkerDeps): TelemetryWorker {
         [rows.map((row) => [row.metric, new Date(row.bucketStart), row.dimsHash, JSON.stringify(row.dims), row.count, row.sum])],
       );
       return fresh.length;
-    });
+    }, { logger });
 
   async function process(entries: StreamEntry[]): Promise<ProcessResult> {
-    if (entries.length === 0) return { applied: 0, duplicates: 0, malformed: 0 };
+    if (entries.length === 0) return empty();
     const byId = new Map<string, TelemetryEvent>();
     let validCount = 0;
     for (const entry of entries) {
@@ -175,7 +212,7 @@ export function createTelemetryWorker(deps: WorkerDeps): TelemetryWorker {
     // Only after the commit. Malformed entries are acked too, so one poison entry can never block
     // the group.
     await redis.xack(STREAM_KEY, GROUP, ...new Set(entries.map((entry) => entry.id)));
-    return { applied, duplicates: validCount - applied, malformed: entries.length - validCount };
+    return { applied, duplicates: validCount - applied, malformed: entries.length - validCount, deadLettered: 0 };
   }
 
   const readNew = (): Promise<StreamEntry[]> =>
@@ -187,8 +224,42 @@ export function createTelemetryWorker(deps: WorkerDeps): TelemetryWorker {
   const reclaim = (): Promise<StreamEntry[]> =>
     withGroup([], async () => {
       const reply = await redis.xautoclaim(STREAM_KEY, GROUP, consumer, claimIdleMs, '0-0', 'COUNT', batchSize);
-      return Array.isArray(reply) ? parseEntries(reply[1]) : [];
+      return withDeliveries(Array.isArray(reply) ? parseEntries(reply[1]) : []);
     });
+
+  // XAUTOCLAIM does not report delivery counts, so one XPENDING over the claimed id range reads
+  // them (XAUTOCLAIM has already counted this delivery).
+  async function withDeliveries(entries: StreamEntry[]): Promise<StreamEntry[]> {
+    if (entries.length === 0) return entries;
+    const ids = entries.map((entry) => entry.id).sort(compareStreamIds);
+    const reply: unknown = await redis.xpending(STREAM_KEY, GROUP, ids[0] ?? '-', ids.at(-1) ?? '+', batchSize * 2, consumer);
+    const counts = new Map<string, number>();
+    if (Array.isArray(reply)) {
+      for (const row of reply as unknown[]) if (Array.isArray(row) && typeof row[0] === 'string') counts.set(row[0], Number(row[3]));
+    }
+    return entries.map((entry) => {
+      const deliveries = counts.get(entry.id);
+      return deliveries === undefined ? entry : { ...entry, deliveries };
+    });
+  }
+
+  // Entries handed out MAX_DELIVERIES times are tried one at a time, so good entries that were
+  // stuck in a batch with a poison entry still apply; the poison is acked as a dead letter. The rest
+  // go through as one batch. Counts land in total as they happen, so a later throw keeps them.
+  async function processClaimed(entries: StreamEntry[], total: ProcessResult): Promise<void> {
+    const tired = entries.filter((entry) => (entry.deliveries ?? 0) >= MAX_DELIVERIES);
+    for (const entry of tired) {
+      try {
+        addInto(total, await process([entry]));
+      } catch (error) {
+        if (!isDataRejection(error)) throw error;
+        await redis.xack(STREAM_KEY, GROUP, entry.id);
+        total.deadLettered += 1;
+        logger.error({ entryId: entry.id, deliveries: entry.deliveries, ...errorFields(error) }, 'telemetry entry dead_letter: MySQL refused it after repeated deliveries, so it was acked and dropped');
+      }
+    }
+    addInto(total, await process(entries.filter((entry) => (entry.deliveries ?? 0) < MAX_DELIVERIES)));
+  }
 
   // Deletes in passes of pruneBatchSize until a pass removes fewer, at most MAX_PRUNE_PASSES passes
   // (S4-F3). Returns the total removed.
@@ -212,9 +283,16 @@ export function createTelemetryWorker(deps: WorkerDeps): TelemetryWorker {
     reclaim,
     process,
     async runOnce() {
+      const total = empty();
       const claimed = await reclaim();
-      const fresh = await readNew();
-      return process([...claimed, ...fresh]);
+      try {
+        await processClaimed(claimed, total);
+      } catch (error) {
+        // They stay pending and come back on a later reclaim; new data goes ahead regardless.
+        logger.error({ entries: claimed.length, ...errorFields(error) }, 'reclaimed telemetry batch failed; its entries stay pending');
+      }
+      addInto(total, await process(await readNew()));
+      return total;
     },
     prune,
     pending: () =>

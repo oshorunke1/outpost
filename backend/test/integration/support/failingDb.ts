@@ -65,3 +65,16 @@ export function beforeQueryDb(db: Db, match: RegExp, hooks: Hook | readonly Hook
     },
   }));
 }
+
+// Matching queries on a transaction connection are refused the way MySQL refuses a value it cannot
+// store (ER_TRUNCATED_WRONG_VALUE, SQLSTATE 22007). Stands in for a row MySQL will never accept.
+export function rejectingQueryDb(db: Db, refuse: (sql: string, values: unknown) => boolean): Db {
+  return wrapDb(db, (conn) => ({
+    query: async (sql: unknown, values?: unknown) => {
+      if (typeof sql === 'string' && refuse(sql, values)) {
+        throw Object.assign(new Error("Incorrect datetime value for column 'bucket_start'"), { code: 'ER_TRUNCATED_WRONG_VALUE', errno: 1292, sqlState: '22007' });
+      }
+      return conn.query(sql as never, values as never);
+    },
+  }));
+}
