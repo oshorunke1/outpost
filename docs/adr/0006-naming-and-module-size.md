@@ -17,7 +17,7 @@ Outpost mixes Luau (the game) with TypeScript (backend and MCP, from M2). Each e
 
 ## Alternatives considered
 
-- **One naming style everywhere.** Forcing camelCase on Luau fights the owner's daily habits and every existing Roblox snippet he would explain in an interview. Forcing PascalCase on TypeScript fights ESLint defaults and every library.
+- **One naming style everywhere.** Forcing camelCase on Luau fights the owner's daily habits and every existing Roblox snippet, which would then need translating before it could be read and reasoned about without a guide. Forcing PascalCase on TypeScript fights ESLint defaults and every library.
 - **A softer limit (a warning only).** Warnings get ignored. A hard limit costs one split now and then and keeps every file readable in one sitting.
 
 ## Consequences
