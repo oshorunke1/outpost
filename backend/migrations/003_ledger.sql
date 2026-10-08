@@ -8,8 +8,10 @@
 --
 -- Lock order for writers (Task 14): lock the player's account_balances row FOR UPDATE by primary
 -- key first (sorted by account_id when there is more than one), then insert here. The foreign keys
--- below take shared locks on the players and accounts rows; fk_ledger_player stays for integrity
--- (S3-F3), and withTransaction retries the rare deadlock with a jittered backoff.
+-- below take shared locks on the players and accounts rows, and fk_ledger_player stays for
+-- integrity (S3-F3). The deadlock against player joins is avoided by that order together with a
+-- rejoin that never locks the accounts or account_balances rows; withTransaction's bounded,
+-- jittered retry on 1213 and 1205 is only the backstop.
 CREATE TABLE ledger_transactions (
   transaction_id CHAR(36) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
   idempotency_key VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
