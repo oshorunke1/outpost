@@ -1,4 +1,5 @@
 import type { AppDeps } from './app.js';
+import type { LedgerService } from './modules/economy/ledger.js';
 import { FAST_ARGON2, createArgon2Hasher, makeDummyHash } from './modules/identity/crypto/password.js';
 import type { PasswordHasher } from './modules/identity/crypto/password.js';
 import { createTokenService, generateKeyPair } from './modules/identity/crypto/tokenService.js';
@@ -25,6 +26,7 @@ import { createMemoryPlayersService } from './modules/players/playersService.js'
 import { systemClock } from './platform/clock.js';
 import type { Clock } from './platform/clock.js';
 import type { AppConfig } from './platform/config.js';
+import { AppError } from './platform/errors.js';
 
 // The whole app wired to in-memory fakes: unit tests and the OpenAPI export use this.
 // It never touches a network and is never used to serve real traffic.
@@ -53,7 +55,20 @@ export interface MemoryOptions {
   clock?: Clock;
   // Builds the store behind each rate limit counter. Tests pass a failing one to prove fail closed.
   windowStore?: () => WindowStore;
+  // Replaces any of the built deps, for example a test ledger. Applied last.
+  overrides?: Partial<AppDeps>;
 }
+
+// The ledger's guarantees come from MySQL row locks, triggers and constraints, so it has no
+// in-memory twin. Route tests pass their own ledger through overrides.
+const unavailable = async (): Promise<never> => Promise.reject(new AppError(503, 'ledger_unavailable', 'The ledger needs MySQL'));
+const unavailableLedger: LedgerService = {
+  submit: unavailable,
+  refund: unavailable,
+  markFulfilled: unavailable,
+  unfulfilledPurchases: unavailable,
+  systemBalance: unavailable,
+};
 
 export async function createMemoryAppDeps(options: MemoryOptions = {}): Promise<MemoryApp> {
   const clock = options.clock ?? systemClock;
@@ -98,7 +113,16 @@ export async function createMemoryAppDeps(options: MemoryOptions = {}): Promise<
   const apiLimiter = new TokenBucketLimiter({ ...API_LIMIT, clock });
 
   return {
-    deps: { config: MEMORY_CONFIG, tokens, auth, serviceTokens, apiLimiter, players: createMemoryPlayersService() },
+    deps: {
+      config: MEMORY_CONFIG,
+      tokens,
+      auth,
+      serviceTokens,
+      apiLimiter,
+      players: createMemoryPlayersService(),
+      ledger: unavailableLedger,
+      ...options.overrides,
+    },
     clock,
     operators,
     serviceClients,

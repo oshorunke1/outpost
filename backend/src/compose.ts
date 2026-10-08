@@ -1,4 +1,6 @@
+import { pino } from 'pino';
 import type { AppDeps } from './app.js';
+import { createLedgerService } from './modules/economy/ledger.js';
 import { generateKeyPair, importSigningKey } from './modules/identity/crypto/keys.js';
 import type { SigningKey } from './modules/identity/crypto/keys.js';
 import { PRODUCTION_ARGON2, createArgon2Hasher, makeDummyHash } from './modules/identity/crypto/password.js';
@@ -21,7 +23,8 @@ import { createRedisIdentityStores } from './modules/identity/stores/redisStores
 import { createMysqlPlayersService } from './modules/players/playersService.js';
 import type { Clock } from './platform/clock.js';
 import type { AppConfig } from './platform/config.js';
-import type { Db } from './platform/db.js';
+import type { Db, TransactionLogger } from './platform/db.js';
+import { loggerOptions } from './platform/logger.js';
 import type { Redis } from './platform/redis.js';
 
 export interface Infra {
@@ -32,6 +35,9 @@ export interface Infra {
 
 export interface ComposeOptions {
   argon2?: Argon2Params; // integration tests pass FAST_ARGON2; everything else gets PRODUCTION_ARGON2
+  // Where the ledger reports a lost COMMIT or a failed rollback. Defaults to a logger with the
+  // app's level, redaction and service name on stdout; tests pass one they can read.
+  logger?: TransactionLogger;
 }
 
 // Production loads the PEM from JWT_PRIVATE_KEY_PEM (loadConfig already insists on it, and this
@@ -81,5 +87,8 @@ export async function createAppDeps(config: AppConfig, infra: Infra, options: Co
   });
   const apiLimiter = new TokenBucketLimiter({ ...API_LIMIT, clock });
 
-  return { config, tokens, auth, serviceTokens, apiLimiter, players: createMysqlPlayersService(db, clock) };
+  const logger = options.logger ?? pino(loggerOptions(config.logLevel)).child({ module: 'ledger' });
+  const ledger = createLedgerService(db, clock, { logger });
+
+  return { config, tokens, auth, serviceTokens, apiLimiter, players: createMysqlPlayersService(db, clock), ledger };
 }

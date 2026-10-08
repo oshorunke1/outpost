@@ -7,6 +7,7 @@ import { createMysqlOperatorRepo } from '../../../src/modules/identity/repos/ope
 import type { Operator } from '../../../src/modules/identity/repos/operatorRepo.js';
 import { OPERATOR_SCOPES } from '../../../src/modules/identity/scopes.js';
 import { systemClock } from '../../../src/platform/clock.js';
+import type { Db, TransactionLogger } from '../../../src/platform/db.js';
 import type { ZodApp } from '../../../src/platform/http.js';
 import type { Redis } from '../../../src/platform/redis.js';
 import type { IntegrationContext } from './context.js';
@@ -14,12 +15,12 @@ import type { IntegrationContext } from './context.js';
 // The real composition root against the test containers, with cheap Argon2 settings.
 export async function createIntegrationApp(
   ctx: IntegrationContext,
-  overrides: { redis?: Redis } = {},
+  overrides: { redis?: Redis; db?: Db; logger?: TransactionLogger } = {},
 ): Promise<{ app: ZodApp; deps: AppDeps }> {
   const deps = await createAppDeps(
     { ...MEMORY_CONFIG, databaseUrl: ctx.databaseUrl },
-    { db: ctx.db, redis: overrides.redis ?? ctx.redis, clock: systemClock },
-    { argon2: FAST_ARGON2 },
+    { db: overrides.db ?? ctx.db, redis: overrides.redis ?? ctx.redis, clock: systemClock },
+    { argon2: FAST_ARGON2, ...(overrides.logger ? { logger: overrides.logger } : {}) },
   );
   return { app: await buildApp(deps), deps };
 }

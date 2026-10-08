@@ -3,6 +3,8 @@ import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { DestinationStream } from 'pino';
+import type { LedgerService } from './modules/economy/ledger.js';
+import { registerEconomyRoutes } from './modules/economy/routes.js';
 import type { TokenService } from './modules/identity/crypto/tokenService.js';
 import { serviceGuard } from './modules/identity/guards.js';
 import type { GuardFor } from './modules/identity/guards.js';
@@ -25,6 +27,7 @@ export interface AppDeps {
   serviceTokens: ServiceTokenService;
   apiLimiter: TokenBucketLimiter;
   players: PlayersService;
+  ledger: LedgerService;
 }
 
 export interface BuildOptions {
@@ -52,5 +55,6 @@ export async function buildApp(deps: AppDeps, options: BuildOptions = {}): Promi
   const guardFor: GuardFor = (scope) => serviceGuard(deps.serviceTokens, deps.apiLimiter, scope);
   registerIdentityRoutes(app, deps);
   registerPlayerRoutes(app, { players: deps.players, guardFor });
+  registerEconomyRoutes(app, { ledger: deps.ledger, guardFor });
   return app;
 }
