@@ -46,13 +46,22 @@ export function createMysqlPlayersService(db: Db, clock: Clock): PlayersService 
     async join(userId) {
       const now = new Date(clock.now());
       const account = playerAccountId(userId);
-      // Every write is an upsert on a unique key, so racing joins for one player all succeed and
-      // leave one player row, one account and one balance. first_seen_at is never in the UPDATE part.
+      // The players row is an upsert, so racing joins all succeed and leave one row; first_seen_at
+      // is never in the UPDATE part. The account and balance rows are checked with a plain read
+      // first and only inserted when missing, so a rejoin takes no lock on them (S3-F3). The ledger
+      // holds the balance row FOR UPDATE and then needs a shared lock on this players row through
+      // fk_ledger_player; a rejoin that held the players row and then waited on the balance row
+      // would close that cycle into a deadlock. INSERT IGNORE would not do: on a duplicate it still
+      // takes a shared lock on the existing row, and it turns other errors into warnings. Rows are
+      // never deleted, so a row seen once stays.
       await withTransaction(db, async (conn) => {
         await conn.execute(
           'INSERT INTO players (roblox_user_id, first_seen_at, last_seen_at) VALUES (?, ?, ?) AS new ON DUPLICATE KEY UPDATE last_seen_at = new.last_seen_at',
           [userId, now, now],
         );
+        const [existing] = await conn.execute<RowDataPacket[]>('SELECT 1 FROM account_balances WHERE account_id = ?', [account]);
+        if (existing[0]) return;
+        // First join only. Two first joins can race here, so both writes are no-op upserts.
         await conn.execute(
           "INSERT INTO accounts (account_id, kind, roblox_user_id, created_at) VALUES (?, 'player', ?, ?) ON DUPLICATE KEY UPDATE account_id = account_id",
           [account, userId, now],

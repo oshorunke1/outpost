@@ -78,6 +78,33 @@ describe('players on MySQL', () => {
     expect((rows[0]?.last_seen_at as Date).getTime()).toBe(Date.UTC(2026, 0, 1, 12, 1, 0));
   });
 
+  // S3-F3: the ledger holds the balance row FOR UPDATE and then needs a shared lock on the players
+  // row (fk_ledger_player). A rejoin that held the players row and then waited on the balance row
+  // closed that cycle into a deadlock, so a rejoin must not lock the accounts or balance rows.
+  test('a rejoin does not wait on locks held on the account or balance row', async () => {
+    const players = createMysqlPlayersService(ctx.db, systemClock);
+    await players.join(6006);
+    const holder = await ctx.db.getConnection();
+    try {
+      await holder.beginTransaction();
+      await holder.query("SELECT balance FROM account_balances WHERE account_id = 'player:6006' FOR UPDATE");
+      await holder.query("SELECT account_id FROM accounts WHERE account_id = 'player:6006' FOR UPDATE");
+      const timedOut = Symbol('timed out');
+      let timer: NodeJS.Timeout | undefined;
+      const outcome = await Promise.race([
+        players.join(6006),
+        new Promise<symbol>((resolve) => {
+          timer = setTimeout(() => resolve(timedOut), 3_000);
+        }),
+      ]);
+      clearTimeout(timer);
+      expect(outcome).toEqual({ userId: 6006, balance: 0 });
+    } finally {
+      await holder.rollback();
+      holder.release();
+    }
+  });
+
   test('a wallet for a player who never joined is 404 player_not_found on MySQL', async () => {
     const response = await app.inject({ method: 'GET', url: '/v1/players/987654321/wallet', headers });
     expect(response.statusCode).toBe(404);
