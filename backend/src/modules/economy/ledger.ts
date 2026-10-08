@@ -33,7 +33,8 @@ export interface UnfulfilledPurchase {
 export interface LedgerService {
   submit(input: { principal: string; idempotencyKey: string; request: TransactionRequest }): Promise<SubmitOutcome>;
   refund(input: { principal: string; idempotencyKey: string; transactionId: string }): Promise<SubmitOutcome>;
-  markFulfilled(transactionId: string): Promise<void>;
+  // With a principal, only a purchase that principal made counts; any other id is purchase_not_found.
+  markFulfilled(transactionId: string, principal?: string): Promise<void>;
   unfulfilledPurchases(userId: number): Promise<UnfulfilledPurchase[]>;
   systemBalance(accountId: string): Promise<number>;
 }
@@ -84,8 +85,12 @@ function replay(prior: Prior, hash: string): SubmitOutcome {
   return { result: prior.result, replayed: true };
 }
 
-async function findByKey(executor: Db | PoolConnection, idempotencyKey: string): Promise<Prior | null> {
-  const [rows] = await executor.execute<RowDataPacket[]>('SELECT request_hash, result FROM ledger_transactions WHERE idempotency_key = ?', [idempotencyKey]);
+// Inside a transaction the lookup is a locking read (FOR SHARE). A locking read always sees the
+// latest committed row, whenever the transaction's snapshot was taken, and it holds the key (or
+// the gap where it would go) until COMMIT.
+async function findByKey(executor: Db | PoolConnection, idempotencyKey: string, options: { lock?: boolean } = {}): Promise<Prior | null> {
+  const sql = `SELECT request_hash, result FROM ledger_transactions WHERE idempotency_key = ?${options.lock ? ' FOR SHARE' : ''}`;
+  const [rows] = await executor.execute<RowDataPacket[]>(sql, [idempotencyKey]);
   const row = rows[0];
   return row ? { requestHash: String(row.request_hash), result: row.result as TransactionResult } : null;
 }
@@ -117,8 +122,8 @@ export function createLedgerService(db: Db, clock: Clock, options: LedgerOptions
   //   2. Look the idempotency key up again. A request with the same key that held the lock before
   //      us has committed by now, so this sees it and replays it (S3-F1). Checking the key only
   //      before the transaction would let a retry of a purchase that just emptied the wallet
-  //      answer a false 422. This is the transaction's first plain read, so its snapshot is taken
-  //      after the locks are held and includes everything committed before them.
+  //      answer a false 422. The lookup is FOR SHARE, a locking read, so it sees the latest
+  //      committed row no matter when the snapshot was taken.
   //   3. For a refund, check the source was not refunded already (the unique key is the backstop).
   //   4. Refuse a negative balance, then append the rows and move the player balances.
   async function record(conn: PoolConnection, args: WriteArgs): Promise<SubmitOutcome> {
@@ -131,7 +136,7 @@ export function createLedgerService(db: Db, clock: Clock, options: LedgerOptions
       before.set(account, Number(rows[0].balance));
     }
 
-    const prior = await findByKey(conn, args.idempotencyKey);
+    const prior = await findByKey(conn, args.idempotencyKey, { lock: true });
     if (prior) return replay(prior, args.hash);
 
     if (args.refundOf !== null) {
@@ -245,9 +250,10 @@ export function createLedgerService(db: Db, clock: Clock, options: LedgerOptions
       return write({ principal, idempotencyKey, hash, plan, refundOf: transactionId });
     },
 
-    async markFulfilled(transactionId) {
-      const [rows] = await db.execute<RowDataPacket[]>("SELECT 1 FROM ledger_transactions WHERE transaction_id = ? AND kind = 'purchase'", [transactionId]);
-      if (!rows[0]) throw ledgerError('purchase_not_found', 'No such purchase');
+    async markFulfilled(transactionId, principal) {
+      const [rows] = await db.execute<RowDataPacket[]>("SELECT principal FROM ledger_transactions WHERE transaction_id = ? AND kind = 'purchase'", [transactionId]);
+      const owned = rows[0] !== undefined && (principal === undefined || String(rows[0].principal) === principal);
+      if (!owned) throw ledgerError('purchase_not_found', 'No such purchase');
       // A repeat acknowledgement is a no-op update, which the insert-only trigger allows.
       await db.execute('INSERT INTO purchase_fulfillments (transaction_id, fulfilled_at) VALUES (?, ?) ON DUPLICATE KEY UPDATE transaction_id = transaction_id', [
         transactionId,

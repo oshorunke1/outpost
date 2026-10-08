@@ -4,38 +4,13 @@ import { createLedgerService } from '../../src/modules/economy/ledger.js';
 import type { LedgerService } from '../../src/modules/economy/ledger.js';
 import { createMysqlPlayersService } from '../../src/modules/players/playersService.js';
 import { systemClock } from '../../src/platform/clock.js';
-import type { Db, PoolConnection, RowDataPacket } from '../../src/platform/db.js';
+import type { RowDataPacket } from '../../src/platform/db.js';
 import { createIntegrationContext } from './support/context.js';
 import type { IntegrationContext } from './support/context.js';
+import { failingCommitDb, lockWaitTimeoutDb } from './support/failingDb.js';
 
 const GAME = 'svc:game-server';
 let nextUser = 5000;
-
-// A pool whose connections fail their COMMIT, either before or after the server applied it. The
-// connection is wrapped, never patched, so the real pooled connection stays clean for reuse.
-function failingCommitDb(db: Db, mode: 'before-apply' | 'after-apply'): Db {
-  const wrap = (conn: PoolConnection): PoolConnection =>
-    new Proxy(conn, {
-      get(target, prop) {
-        if (prop === 'commit') {
-          return async () => {
-            if (mode === 'after-apply') await target.commit();
-            else await target.rollback();
-            throw Object.assign(new Error('Connection lost: The server closed the connection.'), { code: 'PROTOCOL_CONNECTION_LOST' });
-          };
-        }
-        const value: unknown = Reflect.get(target, prop, target);
-        return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
-      },
-    });
-  return new Proxy(db, {
-    get(target, prop) {
-      if (prop === 'getConnection') return async () => wrap(await target.getConnection());
-      const value: unknown = Reflect.get(target, prop, target);
-      return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
-    },
-  });
-}
 
 describe('ledger invariants on MySQL', () => {
   let ctx: IntegrationContext;
@@ -326,6 +301,43 @@ describe('ledger invariants on MySQL', () => {
     expect(retried.replayed).toBe(mode === 'after-apply');
     expect(retried.result).toMatchObject({ amount: 9, balanceAfter: 9 });
     expect(await balance(userId)).toBe(9);
+  });
+
+  test('a lost COMMIT is reported to the logger the ledger was given', async () => {
+    const userId = await newPlayer();
+    const logged: { details: object; message: string }[] = [];
+    const logger = { error: (details: object, message: string) => void logged.push({ details, message }) };
+    const flaky = createLedgerService(failingCommitDb(ctx.db, 'before-apply'), systemClock, { logger });
+    await expect(flaky.submit({ principal: GAME, idempotencyKey: key(), request: { kind: 'earn', userId, amount: 3, reason: 'orbs' } })).rejects.toMatchObject({
+      code: 'ledger_unavailable',
+    });
+    expect(logged).toEqual([{ details: { err: 'Connection lost: The server closed the connection.', code: 'PROTOCOL_CONNECTION_LOST' }, message: 'transaction commit failed; its outcome is unknown' }]);
+  });
+
+  test('a lock wait timeout on every attempt is 503 ledger_unavailable with retry-after, after three tries, and writes nothing', async () => {
+    const userId = await newPlayer();
+    const before = await count('ledger_transactions');
+    const stuck = lockWaitTimeoutDb(ctx.db);
+    const busy = createLedgerService(stuck.db, systemClock);
+    await expect(busy.submit({ principal: GAME, idempotencyKey: key(), request: { kind: 'earn', userId, amount: 4, reason: 'orbs' } })).rejects.toMatchObject({
+      statusCode: 503,
+      code: 'ledger_unavailable',
+      headers: { 'retry-after': '1' },
+      cause: { code: 'ER_LOCK_WAIT_TIMEOUT' },
+    });
+    expect(stuck.attempts()).toBe(3);
+    expect(await count('ledger_transactions')).toBe(before);
+    expect(await balance(userId)).toBe(0);
+  });
+
+  test('only the principal that made a purchase can mark it fulfilled; anyone else gets purchase_not_found', async () => {
+    const userId = await newPlayer(25);
+    const hat = await ledger.submit({ principal: GAME, idempotencyKey: key(), request: { kind: 'purchase', userId, itemId: 'RedHat' } });
+    const id = hat.result.transactionId;
+    await expect(ledger.markFulfilled(id, 'svc:other-client')).rejects.toMatchObject({ statusCode: 404, code: 'purchase_not_found' });
+    expect((await ledger.unfulfilledPurchases(userId)).map((p) => p.transactionId)).toEqual([id]);
+    await ledger.markFulfilled(id, GAME);
+    expect(await ledger.unfulfilledPurchases(userId)).toEqual([]);
   });
 
   test('unfulfilled purchases show up until fulfilled, and refunded ones drop out', async () => {
