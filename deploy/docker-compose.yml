@@ -1,0 +1,37 @@
+# Local development stack. Secrets come from the git-ignored .env at the repo root (pnpm setup:dev).
+# Ports are bound to 127.0.0.1 only. Task 20 adds the backend, worker and observability services.
+# Run it through the root compose.yaml, which names the project and points at the .env.
+services:
+  mysql:
+    image: mysql:8.4.11
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?run pnpm setup:dev first}
+      MYSQL_DATABASE: outpost
+      MYSQL_USER: outpost
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:?run pnpm setup:dev first}
+    ports:
+      - "127.0.0.1:3306:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  redis:
+    image: redis:7.4.11-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - redis-data:/data
+
+volumes:
+  mysql-data: {}
+  redis-data: {}
