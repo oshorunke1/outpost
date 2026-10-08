@@ -66,7 +66,7 @@ The full-system quickstart (`docker compose up -d && pnpm demo`) arrives with M2
 
 ## About
 
-Built with AI pair programming. Every change was reviewed, tested and committed by me, Olushola Shorunke, and anything I could not explain was rewritten or removed.
+Built with AI pair programming (Claude Code). I set the design and scope, and every change passed review and tests before merging.
 
 To report a security problem, see [SECURITY.md](SECURITY.md).
 
