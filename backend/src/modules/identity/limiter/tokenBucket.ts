@@ -84,3 +84,7 @@ export class TokenBucketLimiter {
 // Per service client, per backend instance. 50 a second is far above a game server's own
 // HttpService budget (500 a minute), so only a misbehaving or leaked client ever hits it.
 export const API_LIMIT = { capacity: 100, refillPerSecond: 50 } as const;
+
+// Per caller IP, the keys the service token exchange still checks while that IP is blocked for
+// failures, so a game server sharing an egress IP with a bad caller is never locked out.
+export const BLOCKED_VERIFY_LIMIT = { capacity: 2, refillPerSecond: 1, maxKeys: 10_000 } as const;

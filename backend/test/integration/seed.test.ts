@@ -33,13 +33,14 @@ describe('seedDev on MySQL', () => {
   });
 
   const hasher = createArgon2Hasher(FAST_ARGON2);
-  const seed = (overrides: { nodeEnv?: string | undefined; rotate?: boolean; operatorPassword?: string } = {}) =>
+  const seed = (overrides: { nodeEnv?: string | undefined; rotate?: boolean; operatorPassword?: string; apiKey?: string } = {}) =>
     seedDev({
       db: ctx.db,
       clock: systemClock,
       hasher,
       nodeEnv: 'nodeEnv' in overrides ? overrides.nodeEnv : 'test',
       ...(overrides.rotate ? { rotate: true } : {}),
+      ...(overrides.apiKey !== undefined ? { apiKey: overrides.apiKey } : {}),
       operatorEmail: 'Dev@Outpost.Local',
       operatorPassword: overrides.operatorPassword ?? 'first-pw',
     });
@@ -87,6 +88,7 @@ describe('seedDev on MySQL', () => {
     await expect(seed({ operatorPassword: 'second-pw' })).resolves.toEqual({
       clientId: GAME_CLIENT_ID,
       apiKey: null,
+      keySource: 'existing',
       operatorEmail: 'dev@outpost.local',
     });
     expect((await exchange(first.apiKey ?? '')).statusCode).toBe(200);
@@ -102,6 +104,50 @@ describe('seedDev on MySQL', () => {
     expect((await exchange(rotated.apiKey ?? '')).statusCode).toBe(200);
   });
 
+  describe('with the dev env key', () => {
+    const ENV_KEY = `opk_game-server.${'e'.repeat(43)}`;
+
+    test('stores only its hash, prints nothing, exchanges for 200 and survives a re-run', async () => {
+      await expect(seed({ apiKey: ENV_KEY })).resolves.toMatchObject({ clientId: GAME_CLIENT_ID, apiKey: null, keySource: 'env' });
+      const rows = await clientRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.secret_hash).toMatch(/^\$argon2id\$/);
+      expect(rows[0]?.secret_hash).not.toContain('e'.repeat(43));
+      expect((await exchange(ENV_KEY)).statusCode).toBe(200);
+
+      await expect(seed({ apiKey: ENV_KEY })).resolves.toMatchObject({ apiKey: null, keySource: 'env' });
+      expect((await exchange(ENV_KEY)).statusCode).toBe(200);
+    });
+
+    test('takes over from a generated key, so the env key works even after a key was printed', async () => {
+      const generated = await seed();
+      await seed({ apiKey: ENV_KEY });
+      expect((await exchange(ENV_KEY)).statusCode).toBe(200);
+      const old = await exchange(generated.apiKey ?? '');
+      expect(old.statusCode).toBe(401);
+      expect(old.json()).toMatchObject({ error: 'invalid_api_key' });
+    });
+
+    test('a malformed env key is refused before any write', async () => {
+      for (const bad of ['', 'not-a-key', `opk_game-server.short`, `${ENV_KEY} `]) {
+        await expect(seed({ apiKey: bad })).rejects.toThrow('OUTPOST_GAME_API_KEY must look like opk_<clientId>.<secret>');
+      }
+      expect(await clientRows()).toEqual([]);
+    });
+
+    test('--rotate is refused while an env key is set, before any write', async () => {
+      await expect(seed({ apiKey: ENV_KEY, rotate: true })).rejects.toThrow('cannot be used while OUTPOST_GAME_API_KEY is set');
+      expect(await clientRows()).toEqual([]);
+    });
+
+    test('production and staging are still refused with an env key present', async () => {
+      for (const nodeEnv of ['production', 'staging', undefined]) {
+        await expect(seed({ nodeEnv, apiKey: ENV_KEY })).rejects.toThrow('only runs when NODE_ENV is development or test');
+      }
+      expect(await clientRows()).toEqual([]);
+    });
+  });
+
   test('a client disabled in MySQL cannot exchange its key', async () => {
     const { apiKey } = await seed();
     await createMysqlServiceClientRepo(ctx.db, systemClock).setDisabled(GAME_CLIENT_ID, true);
@@ -111,13 +157,16 @@ describe('seedDev on MySQL', () => {
   });
 
   describe('the seed CLI', () => {
-    const cli = async (nodeEnv: string | undefined) => {
+    // The child env is built explicitly: the root .env (loaded by the vitest config) may hold a real
+    // OUTPOST_GAME_API_KEY, so each test says whether the key is set instead of inheriting it.
+    const cli = async (nodeEnv: string | undefined, apiKey?: string) => {
       const env: NodeJS.ProcessEnv = { ...process.env, DATABASE_URL: ctx.databaseUrl };
       delete env.NODE_ENV;
       delete env.OUTPOST_DEV_OPERATOR_EMAIL;
       delete env.OUTPOST_DEV_OPERATOR_PASSWORD;
       delete env.OUTPOST_GAME_API_KEY;
       if (nodeEnv !== undefined) env.NODE_ENV = nodeEnv;
+      if (apiKey !== undefined) env.OUTPOST_GAME_API_KEY = apiKey;
       try {
         const { stdout, stderr } = await run(process.execPath, ['--import', 'tsx', 'src/cli/seed.ts'], { cwd: BACKEND_DIR, env });
         return { code: 0, stdout, stderr };
@@ -134,6 +183,31 @@ describe('seedDev on MySQL', () => {
         expect(result.stderr).toContain('only runs when NODE_ENV is development or test');
         expect(result.stdout).not.toMatch(KEY_SHAPE);
       }
+      expect(await clientRows()).toEqual([]);
+    });
+
+    test('with the env key set it prints no key, and that key works', async () => {
+      const envKey = `opk_game-server.${'c'.repeat(43)}`;
+      const result = await cli('development', envKey);
+      expect(result.code).toBe(0);
+      expect(result.stdout).not.toMatch(KEY_SHAPE);
+      expect(result.stdout).not.toContain('c'.repeat(43));
+      expect(result.stderr).not.toContain('c'.repeat(43));
+      expect((await exchange(envKey)).statusCode).toBe(200);
+    });
+
+    test('a malformed env key exits 1 without echoing the key or writing', async () => {
+      const bad = await cli('development', `opk_game-server.${'c'.repeat(20)}`);
+      expect(bad.code).toBe(1);
+      expect(bad.stderr).toContain('OUTPOST_GAME_API_KEY must look like opk_<clientId>.<secret>');
+      expect(bad.stderr + bad.stdout).not.toContain('c'.repeat(20));
+      expect(await clientRows()).toEqual([]);
+    });
+
+    test('production is refused even with the env key set', async () => {
+      const result = await cli('production', `opk_game-server.${'c'.repeat(43)}`);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('only runs when NODE_ENV is development or test');
       expect(await clientRows()).toEqual([]);
     });
 

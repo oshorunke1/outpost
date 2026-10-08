@@ -11,12 +11,13 @@ import {
 } from './modules/identity/limiter/loginLimiter.js';
 import { SlidingWindowCounter, createMemoryWindowStore } from './modules/identity/limiter/slidingWindow.js';
 import type { WindowStore } from './modules/identity/limiter/slidingWindow.js';
-import { API_LIMIT, TokenBucketLimiter } from './modules/identity/limiter/tokenBucket.js';
+import { API_LIMIT, BLOCKED_VERIFY_LIMIT, TokenBucketLimiter } from './modules/identity/limiter/tokenBucket.js';
 import { createMemoryOperatorRepo } from './modules/identity/repos/operatorRepo.js';
 import type { OperatorRepo } from './modules/identity/repos/operatorRepo.js';
 import { createMemoryServiceClientRepo } from './modules/identity/repos/serviceClientRepo.js';
 import type { ServiceClientRepo } from './modules/identity/repos/serviceClientRepo.js';
 import { GAME_SCOPES } from './modules/identity/scopes.js';
+import { GAME_CLIENT_ID } from './modules/identity/seed.js';
 import { createAuthService } from './modules/identity/services/authService.js';
 import { createServiceTokenService } from './modules/identity/services/serviceTokenService.js';
 import { createMemoryIdentityStores } from './modules/identity/stores/memoryStores.js';
@@ -82,7 +83,7 @@ export async function createMemoryAppDeps(options: MemoryOptions = {}): Promise<
   // The game-server client exists from the start, with a random secret nobody knows, so tests can
   // sign game tokens with gameToken(). A test that exchanges a key upserts its own secret.
   const serviceClients = createMemoryServiceClientRepo();
-  await serviceClients.upsert({ clientId: 'game-server', secretHash: await makeDummyHash(hasher), scopes: GAME_SCOPES });
+  await serviceClients.upsert({ clientId: GAME_CLIENT_ID, secretHash: await makeDummyHash(hasher), scopes: GAME_SCOPES });
   const serviceTokens = createServiceTokenService({
     clients: serviceClients,
     tokens,
@@ -91,6 +92,7 @@ export async function createMemoryAppDeps(options: MemoryOptions = {}): Promise<
     clock,
     perClient: counter(SERVICE_TOKEN_LIMIT),
     ipFailures: counter(SERVICE_TOKEN_IP_FAILURE_LIMIT),
+    blockedVerify: new TokenBucketLimiter({ ...BLOCKED_VERIFY_LIMIT, clock }),
   });
   const apiLimiter = new TokenBucketLimiter({ ...API_LIMIT, clock });
 

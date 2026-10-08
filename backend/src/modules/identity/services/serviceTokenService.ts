@@ -5,6 +5,7 @@ import type { PasswordHasher } from '../crypto/password.js';
 import { ACCESS_TOKEN_TTL_SECONDS } from '../crypto/tokenService.js';
 import type { TokenService } from '../crypto/tokenService.js';
 import type { HitResult, SlidingWindowCounter } from '../limiter/slidingWindow.js';
+import type { TokenBucketLimiter } from '../limiter/tokenBucket.js';
 import type { ServicePrincipal } from '../principal.js';
 import type { ServiceClient, ServiceClientRepo } from '../repos/serviceClientRepo.js';
 import { failClosed } from './authService.js';
@@ -31,11 +32,14 @@ export interface ServiceTokenServiceDeps {
   perClient: SlidingWindowCounter;
   // Failed exchanges per caller IP (SERVICE_TOKEN_IP_FAILURE_LIMIT).
   ipFailures: SlidingWindowCounter;
+  // Per IP, how many keys may still be checked while that IP is blocked (BLOCKED_VERIFY_LIMIT).
+  blockedVerify: TokenBucketLimiter;
 }
 
-// How long authenticate trusts a client lookup. A disabled client is cut off within this window.
+// How long authenticate trusts a client lookup. A disabled client is cut off, and narrowed scopes
+// take effect, within this window.
 export const CLIENT_CACHE_MS = 30_000;
-const CLIENT_CACHE_MAX = 1_000;
+export const CLIENT_CACHE_MAX = 1_000;
 
 // The exchange answers a bad key with "WWW-Authenticate: ApiKey", the scheme this endpoint takes.
 // Routes that take the resulting token challenge with Bearer instead (see guards.ts).
@@ -55,7 +59,13 @@ function rateLimited(result: HitResult): AppError {
 // starve the real game server by sending bad keys under its id. So the per-client counter only
 // counts exchanges whose secret verified, and failures count against the caller's IP, which comes
 // from the socket or a trusted proxy (trustProxy is a CIDR list), never from a header the caller sets.
-// The IP check is a peek that runs before any hash work, so a blocked IP costs almost nothing.
+// The IP check is a peek that runs before any hash work.
+//
+// Blocking an IP outright is not enough, though. Roblox game servers share datacenter egress IPs, so
+// one bad caller behind the same IP as the real game server could lock it out. So a blocked IP may
+// still have a key checked through a small per-IP token bucket (2 at once, then 1 a second). A valid
+// key then succeeds and is not counted as a failure; an invalid one is a 429 and counts. With the
+// bucket empty the answer is 429 with no hash work, so a blocked IP costs about one hash a second.
 export function createServiceTokenService(deps: ServiceTokenServiceDeps): ServiceTokenService {
   const cache = new Map<string, { client: ServiceClient | null; fetchedAt: number }>();
 
@@ -82,15 +92,23 @@ export function createServiceTokenService(deps: ServiceTokenServiceDeps): Servic
     async exchange({ authorization, ip }) {
       const ipKey = `ip:${ip}`;
       const ipCheck = await failClosed(() => deps.ipFailures.peek(ipKey));
-      if (!ipCheck.allowed) throw rateLimited(ipCheck);
+      const blocked = !ipCheck.allowed;
 
       const key = parseApiKeyHeader(authorization);
-      if (!key) return fail(ipKey);
+      if (!key) {
+        if (blocked) throw rateLimited(ipCheck);
+        return fail(ipKey);
+      }
+      if (blocked && !deps.blockedVerify.allow(ipKey)) throw rateLimited(ipCheck);
       const client = await failClosed(() => deps.clients.findById(key.clientId));
       // Always one verify, against the dummy hash when the client is unknown, so an unknown client id
       // takes as long as a wrong secret and the two cannot be told apart.
       const secretOk = await deps.hasher.verify(client?.secretHash ?? deps.dummyHash, key.secret);
-      if (!client || client.disabled || !secretOk) return fail(ipKey);
+      if (!client || client.disabled || !secretOk) {
+        if (!blocked) return fail(ipKey);
+        await failClosed(() => deps.ipFailures.hit(ipKey));
+        throw rateLimited(ipCheck);
+      }
 
       const clientCheck = await failClosed(() => deps.perClient.hit(`client:${client.clientId}`));
       if (!clientCheck.allowed) throw rateLimited(clientCheck);
@@ -105,10 +123,12 @@ export function createServiceTokenService(deps: ServiceTokenServiceDeps): Servic
       } catch {
         throw unauthorized();
       }
-      // A valid signature is not enough: the client must still exist and be enabled.
+      // A valid signature is not enough: the client must still exist and be enabled, and the token
+      // only carries the scopes the client still has, so narrowing a client takes effect quickly.
       const client = await failClosed(() => lookup(claims.clientId));
       if (!client || client.disabled) throw unauthorized();
-      return { kind: 'service', clientId: claims.clientId, scopes: claims.scopes };
+      const allowed: readonly string[] = client.scopes;
+      return { kind: 'service', clientId: claims.clientId, scopes: claims.scopes.filter((scope) => allowed.includes(scope)) };
     },
   };
 }

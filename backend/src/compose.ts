@@ -12,7 +12,7 @@ import {
   createLoginLimiter,
 } from './modules/identity/limiter/loginLimiter.js';
 import { SlidingWindowCounter, createRedisWindowStore } from './modules/identity/limiter/slidingWindow.js';
-import { API_LIMIT, TokenBucketLimiter } from './modules/identity/limiter/tokenBucket.js';
+import { API_LIMIT, BLOCKED_VERIFY_LIMIT, TokenBucketLimiter } from './modules/identity/limiter/tokenBucket.js';
 import { createMysqlOperatorRepo } from './modules/identity/repos/operatorRepo.js';
 import { createMysqlServiceClientRepo } from './modules/identity/repos/serviceClientRepo.js';
 import { createAuthService } from './modules/identity/services/authService.js';
@@ -75,6 +75,8 @@ export async function createAppDeps(config: AppConfig, infra: Infra, options: Co
     clock,
     perClient: counter('ratelimit:service-token:client', SERVICE_TOKEN_LIMIT),
     ipFailures: counter('ratelimit:service-token:ipfail', SERVICE_TOKEN_IP_FAILURE_LIMIT),
+    // Per instance, like the API limiter. It only ever loosens a block, by about one check a second.
+    blockedVerify: new TokenBucketLimiter({ ...BLOCKED_VERIFY_LIMIT, clock }),
   });
   const apiLimiter = new TokenBucketLimiter({ ...API_LIMIT, clock });
 
