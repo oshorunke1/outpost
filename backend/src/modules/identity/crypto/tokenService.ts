@@ -60,6 +60,22 @@ export class InvalidTokenError extends Error {
   }
 }
 
+const PRIVATE_MEMBERS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'];
+
+// Copies only the members that belong in a public JWKS.
+function publicOnly(jwk: JWK): JWK {
+  const out: JWK = {};
+  for (const member of ['kty', 'n', 'e', 'kid', 'alg', 'use'] as const) {
+    const value = jwk[member];
+    if (value !== undefined) out[member] = value;
+  }
+  return out;
+}
+
+function noWhitespace(value: string): boolean {
+  return !/\s/.test(value);
+}
+
 function scopesOf(payload: JWTPayload): string[] {
   return typeof payload.scope === 'string' && payload.scope.length > 0 ? payload.scope.split(' ') : [];
 }
@@ -67,7 +83,12 @@ function scopesOf(payload: JWTPayload): string[] {
 export function createTokenService(key: SigningKey, options: TokenServiceOptions = {}): TokenService {
   const issuer = options.issuer ?? 'outpost';
   const now = options.now ?? (() => Date.now());
-  const keySet: JWK[] = [key.publicJwk, ...(options.previousKeys ?? [])];
+  for (const previous of options.previousKeys ?? []) {
+    for (const member of PRIVATE_MEMBERS) {
+      if (member in previous) throw new Error(`previousKeys must be public keys, found member ${member}`);
+    }
+  }
+  const keySet: JWK[] = [key.publicJwk, ...(options.previousKeys ?? [])].map(publicOnly);
   const resolveKey = createKeyResolver(() => keySet, new LruCache(16));
 
   async function sign(kind: TokenKind, subject: string, claims: Record<string, unknown>): Promise<string> {
@@ -92,6 +113,7 @@ export function createTokenService(key: SigningKey, options: TokenServiceOptions
         audience: AUDIENCE,
         typ: TOKEN_TYPE,
         currentDate: new Date(now()),
+        requiredClaims: ['exp', 'iat', 'sub', 'jti'],
       }));
     } catch (error) {
       throw new InvalidTokenError(error instanceof Error ? error.message : 'verification failed');
@@ -121,7 +143,15 @@ export function createTokenService(key: SigningKey, options: TokenServiceOptions
       };
     },
 
-    signServiceToken: (input) => sign('service', `svc:${input.clientId}`, { scope: input.scopes.join(' ') }),
+    async signServiceToken(input) {
+      if (input.clientId.length === 0 || !noWhitespace(input.clientId)) {
+        throw new Error('clientId must be non-empty with no whitespace');
+      }
+      if (!input.scopes.every((scope) => scope.length > 0 && noWhitespace(scope))) {
+        throw new Error('every scope must be non-empty with no whitespace');
+      }
+      return sign('service', `svc:${input.clientId}`, { scope: input.scopes.join(' ') });
+    },
 
     async verifyServiceToken(jwt) {
       const payload = await verify(jwt, 'service');

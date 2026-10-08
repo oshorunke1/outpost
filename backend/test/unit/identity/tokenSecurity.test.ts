@@ -1,4 +1,5 @@
-import { SignJWT, UnsecuredJWT } from 'jose';
+import { createPublicKey } from 'node:crypto';
+import { SignJWT, exportJWK } from 'jose';
 import { describe, expect, test } from 'vitest';
 import { exportPrivateKeyPem, importSigningKey } from '../../../src/modules/identity/crypto/keys.js';
 import {
@@ -10,18 +11,33 @@ import {
 
 // identity-service design test 7: algorithm confusion is rejected.
 describe('token verification refuses forged tokens', () => {
-  test('alg none', async () => {
-    const tokens = createTokenService(await generateKeyPair());
-    const unsigned = new UnsecuredJWT({ kind: 'operator', tv: 1, scope: '' })
-      .setSubject('op-1')
-      .setIssuer('outpost')
-      .setAudience(AUDIENCE)
-      .setExpirationTime('5m')
-      .encode();
-    await expect(tokens.verifyAccessToken(unsigned)).rejects.toBeInstanceOf(InvalidTokenError);
+  const ALG_NOT_ALLOWED = /"alg".*not allowed/;
+
+  test('alg none, with a real kid and the right typ so only the alg is wrong', async () => {
+    const key = await generateKeyPair();
+    const tokens = createTokenService(key);
+    const encode = (value: object): string => Buffer.from(JSON.stringify(value)).toString('base64url');
+    const unsigned = [
+      encode({ alg: 'none', kid: key.kid, typ: 'at+jwt' }),
+      encode({
+        kind: 'operator',
+        tv: 1,
+        scope: '',
+        sub: 'op-1',
+        iss: 'outpost',
+        aud: AUDIENCE,
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 300,
+        jti: 'x',
+      }),
+      '',
+    ].join('.');
+    const result = tokens.verifyAccessToken(unsigned);
+    await expect(result).rejects.toBeInstanceOf(InvalidTokenError);
+    await expect(result).rejects.toThrow(ALG_NOT_ALLOWED);
   });
 
-  test('HS256 signed with the public key as the shared secret', async () => {
+  test('HS256 signed with the public JWK as the shared secret', async () => {
     const key = await generateKeyPair();
     const tokens = createTokenService(key);
     const secret = new TextEncoder().encode(JSON.stringify(key.publicJwk));
@@ -30,9 +46,31 @@ describe('token verification refuses forged tokens', () => {
       .setSubject('op-1')
       .setIssuer('outpost')
       .setAudience(AUDIENCE)
+      .setIssuedAt()
+      .setJti('x')
       .setExpirationTime('5m')
       .sign(secret);
-    await expect(tokens.verifyAccessToken(forged)).rejects.toBeInstanceOf(InvalidTokenError);
+    const result = tokens.verifyAccessToken(forged);
+    await expect(result).rejects.toBeInstanceOf(InvalidTokenError);
+    await expect(result).rejects.toThrow(ALG_NOT_ALLOWED);
+  });
+
+  test('HS256 signed with the PEM encoded SPKI public key as the shared secret', async () => {
+    const key = await generateKeyPair();
+    const tokens = createTokenService(key);
+    const pem = createPublicKey({ key: key.publicJwk, format: 'jwk' }).export({ type: 'spki', format: 'pem' }).toString();
+    const forged = await new SignJWT({ kind: 'operator', tv: 1, scope: 'approvals:decide' })
+      .setProtectedHeader({ alg: 'HS256', kid: key.kid, typ: 'at+jwt' })
+      .setSubject('op-1')
+      .setIssuer('outpost')
+      .setAudience(AUDIENCE)
+      .setIssuedAt()
+      .setJti('x')
+      .setExpirationTime('5m')
+      .sign(new TextEncoder().encode(pem));
+    const result = tokens.verifyAccessToken(forged);
+    await expect(result).rejects.toBeInstanceOf(InvalidTokenError);
+    await expect(result).rejects.toThrow(ALG_NOT_ALLOWED);
   });
 
   test('RS256 signed by another key that claims our kid', async () => {
@@ -93,6 +131,19 @@ describe('token verification refuses forged tokens', () => {
     await expect(tokens.verifyServiceToken(jwt)).rejects.toBeInstanceOf(InvalidTokenError);
   });
 
+  test('rejects a token signed by our key that has no exp', async () => {
+    const key = await generateKeyPair();
+    const jwt = await new SignJWT({ kind: 'operator', tv: 1, scope: '' })
+      .setProtectedHeader({ alg: 'RS256', kid: key.kid, typ: 'at+jwt' })
+      .setSubject('op-1')
+      .setIssuer('outpost')
+      .setAudience(AUDIENCE)
+      .setIssuedAt()
+      .setJti('x')
+      .sign(key.privateKey);
+    await expect(createTokenService(key).verifyAccessToken(jwt)).rejects.toThrow(/exp/);
+  });
+
   test('a service token used as an operator token, and the other way round', async () => {
     const tokens = createTokenService(await generateKeyPair());
     const service = await tokens.signServiceToken({ clientId: 'game-server', scopes: ['game:economy'] });
@@ -126,6 +177,20 @@ describe('service tokens and the key set', () => {
       expect(jwk).not.toHaveProperty('d');
       expect(jwk).toMatchObject({ kty: 'RSA', alg: 'RS256', use: 'sig' });
     }
+  });
+
+  test('a previous key with private members is refused, so the jwks cannot leak one', async () => {
+    const current = await generateKeyPair();
+    const old = await generateKeyPair();
+    const full = await exportJWK(old.privateKey);
+    expect(() => createTokenService(current, { previousKeys: [{ ...full, kid: old.kid }] })).toThrow(/public keys/);
+  });
+
+  test('a service token refuses a blank or spaced client id and spaced scopes', async () => {
+    const tokens = createTokenService(await generateKeyPair());
+    await expect(tokens.signServiceToken({ clientId: '', scopes: [] })).rejects.toThrow(/clientId/);
+    await expect(tokens.signServiceToken({ clientId: 'game server', scopes: [] })).rejects.toThrow(/clientId/);
+    await expect(tokens.signServiceToken({ clientId: 'game', scopes: ['a b'] })).rejects.toThrow(/scope/);
   });
 
   test('the kid is deterministic across an export and import round trip', async () => {

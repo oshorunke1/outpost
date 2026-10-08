@@ -19,13 +19,16 @@ export function createKeyResolver(
     if (header.alg !== SIGNING_ALG) throw new Error(`unexpected alg ${String(header.alg)}`);
     const kid = header.kid;
     if (typeof kid !== 'string') throw new Error('the token has no kid');
-    const cached = cache.get(kid);
-    if (cached) return cached;
+    // The key set is read on every call so a retired kid stops verifying at once. Only the costly
+    // import is cached, keyed by kid and modulus so a swapped key under the same kid is re-imported.
     const jwk = keySet().find((candidate) => candidate.kid === kid);
     if (!jwk) throw new Error(`unknown kid ${kid}`);
+    const cacheKey = `${kid}:${jwk.n ?? ''}`;
+    const cached = cache.get(cacheKey);
+    if (cached) return cached;
     const imported = await importJWK(jwk, SIGNING_ALG);
     if (imported instanceof Uint8Array) throw new Error('expected an RSA public key');
-    cache.set(kid, imported);
+    cache.set(cacheKey, imported);
     return imported;
   };
 }
