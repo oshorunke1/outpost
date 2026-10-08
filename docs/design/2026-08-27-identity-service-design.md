@@ -2,6 +2,7 @@
 
 **Date:** 2026-08-27
 **Status:** Approved (approach A, vertical slices)
+**In Outpost:** this is the original design record. Outpost keeps its auth design and replaces DynamoDB with MySQL (ADR 0007, `docs/adr/0007-mysql-and-redis.md`, written in Task 32); slices 5 (DynamoDB) and 6 (account linking) and `/register` are not carried over.
 
 ## Purpose
 

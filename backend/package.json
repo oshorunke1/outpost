@@ -1,28 +1,30 @@
 {
-  "name": "identity-service",
-  "version": "0.1.0",
+  "name": "@outpost/backend",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "scripts": {
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "dev": "tsx watch src/server.ts",
-    "infra:up": "docker compose up -d",
-    "infra:down": "docker compose down"
+    "lint": "eslint .",
+    "test:unit": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
-    "@node-rs/argon2": "^2.1.0",
-    "fastify": "^5.12.1",
-    "jose": "^6.2.10"
+    "@node-rs/argon2": "2.2.2",
+    "fastify": "5.12.5",
+    "jose": "6.2.12"
   },
   "devDependencies": {
-    "@types/node": "^26.4.0",
-    "tsx": "^4.23.12",
-    "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "@eslint/js": "10.0.1",
+    "@types/node": "22.20.5",
+    "eslint": "10.12.0",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.1",
+    "vite": "8.3.3",
+    "vitest": "5.0.3"
   }
 }

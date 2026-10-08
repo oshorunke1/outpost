@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { generateKeyPair, createTokenService } from '../src/crypto/tokenService.js';
+import { generateKeyPair, createTokenService } from '../../../src/modules/identity/crypto/tokenService.js';
 
 describe('token service', () => {
   test('signs an access token that verifies back to the same subject', async () => {
