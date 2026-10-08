@@ -21,6 +21,7 @@ import { GAME_CLIENT_ID } from './modules/identity/seed.js';
 import { createAuthService } from './modules/identity/services/authService.js';
 import { createServiceTokenService } from './modules/identity/services/serviceTokenService.js';
 import { createMemoryIdentityStores } from './modules/identity/stores/memoryStores.js';
+import { createMemoryPlayersService } from './modules/players/playersService.js';
 import { systemClock } from './platform/clock.js';
 import type { Clock } from './platform/clock.js';
 import type { AppConfig } from './platform/config.js';
@@ -97,7 +98,7 @@ export async function createMemoryAppDeps(options: MemoryOptions = {}): Promise<
   const apiLimiter = new TokenBucketLimiter({ ...API_LIMIT, clock });
 
   return {
-    deps: { config: MEMORY_CONFIG, tokens, auth, serviceTokens, apiLimiter },
+    deps: { config: MEMORY_CONFIG, tokens, auth, serviceTokens, apiLimiter, players: createMemoryPlayersService() },
     clock,
     operators,
     serviceClients,

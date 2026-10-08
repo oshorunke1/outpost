@@ -10,6 +10,8 @@ import type { TokenBucketLimiter } from './modules/identity/limiter/tokenBucket.
 import { registerIdentityRoutes } from './modules/identity/routes.js';
 import type { AuthService } from './modules/identity/services/authService.js';
 import type { ServiceTokenService } from './modules/identity/services/serviceTokenService.js';
+import type { PlayersService } from './modules/players/playersService.js';
+import { registerPlayerRoutes } from './modules/players/routes.js';
 import type { AppConfig } from './platform/config.js';
 import { registerErrorHandler } from './platform/errors.js';
 import type { ZodApp } from './platform/http.js';
@@ -22,6 +24,7 @@ export interface AppDeps {
   auth: AuthService;
   serviceTokens: ServiceTokenService;
   apiLimiter: TokenBucketLimiter;
+  players: PlayersService;
 }
 
 export interface BuildOptions {
@@ -48,6 +51,6 @@ export async function buildApp(deps: AppDeps, options: BuildOptions = {}): Promi
 
   const guardFor: GuardFor = (scope) => serviceGuard(deps.serviceTokens, deps.apiLimiter, scope);
   registerIdentityRoutes(app, deps);
-  void guardFor; // used by the player, economy, telemetry and flag routes from Task 12 on
+  registerPlayerRoutes(app, { players: deps.players, guardFor });
   return app;
 }

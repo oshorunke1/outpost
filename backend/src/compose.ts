@@ -18,6 +18,7 @@ import { createMysqlServiceClientRepo } from './modules/identity/repos/serviceCl
 import { createAuthService } from './modules/identity/services/authService.js';
 import { createServiceTokenService } from './modules/identity/services/serviceTokenService.js';
 import { createRedisIdentityStores } from './modules/identity/stores/redisStores.js';
+import { createMysqlPlayersService } from './modules/players/playersService.js';
 import type { Clock } from './platform/clock.js';
 import type { AppConfig } from './platform/config.js';
 import type { Db } from './platform/db.js';
@@ -80,5 +81,5 @@ export async function createAppDeps(config: AppConfig, infra: Infra, options: Co
   });
   const apiLimiter = new TokenBucketLimiter({ ...API_LIMIT, clock });
 
-  return { config, tokens, auth, serviceTokens, apiLimiter };
+  return { config, tokens, auth, serviceTokens, apiLimiter, players: createMysqlPlayersService(db, clock) };
 }
