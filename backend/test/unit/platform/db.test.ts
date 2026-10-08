@@ -1,4 +1,6 @@
-import { describe, expect, test } from 'vitest';
+import { createServer } from 'node:net';
+import type { AddressInfo, Server, Socket } from 'node:net';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import type { Db } from '../../../src/platform/db.js';
 import { createPool, duplicateKeyName, isDuplicateKey, pingDb, withTransaction } from '../../../src/platform/db.js';
 import { connectRedis } from '../../../src/platform/redis.js';
@@ -60,20 +62,21 @@ describe('duplicate keys', () => {
 });
 
 // Port 1 on loopback refuses at once, so these prove the failure is quick and names the service.
-describe('unreachable services fail fast (S2-F10)', () => {
-  const TIMEOUT_MS = 1_500;
+// The bound is loose because Windows can take a moment to report a refused connection.
+describe('refused services fail fast (S2-F10)', () => {
+  const BOUND_MS = 5_000;
 
   test('MySQL names itself, hides the password, and does not hang', async () => {
-    const pool = createPool('mysql://root:s3cretpw@127.0.0.1:1/outpost', { connectionLimit: 1, connectTimeoutMs: TIMEOUT_MS });
+    const pool = createPool('mysql://root:s3cretpw@127.0.0.1:1/outpost', { connectionLimit: 1, connectTimeoutMs: 1_500 });
     const started = Date.now();
     try {
       const failure = await pingDb(pool).then(
         () => null,
         (error: unknown) => error as Error,
       );
-      expect(failure?.message).toMatch(/^MySQL is unreachable \(ECONNREFUSED\)$/);
+      expect(failure?.message).toBe('MySQL is unreachable (ECONNREFUSED)');
       expect(failure?.message).not.toContain('s3cretpw');
-      expect(Date.now() - started).toBeLessThan(TIMEOUT_MS);
+      expect(Date.now() - started).toBeLessThan(BOUND_MS);
     } finally {
       await pool.end();
     }
@@ -81,12 +84,61 @@ describe('unreachable services fail fast (S2-F10)', () => {
 
   test('Redis names itself, hides the password, and does not hang', async () => {
     const started = Date.now();
-    const failure = await connectRedis('redis://:s3cretpw@127.0.0.1:1/15', TIMEOUT_MS).then(
+    const failure = await connectRedis('redis://:s3cretpw@127.0.0.1:1/15', 1_500).then(
       () => null,
       (error: unknown) => error as Error,
     );
-    expect(failure?.message).toMatch(/^Redis is unreachable \(.*ECONNREFUSED.*\)$/);
+    expect(failure?.message).toMatch(/^Redis is unreachable [(].*ECONNREFUSED.*[)]$/);
     expect(failure?.message).not.toContain('s3cretpw');
-    expect(Date.now() - started).toBeLessThan(TIMEOUT_MS);
+    expect(Date.now() - started).toBeLessThan(BOUND_MS);
+  });
+});
+
+// A server that accepts the socket and then says nothing is what a hung database looks like, and
+// it is the only way to reach the real timeout path.
+describe('silent services hit the connect timeout (S2-F10)', () => {
+  const TIMEOUT_MS = 400;
+  const BOUND_MS = 5_000;
+  let server: Server;
+  const held: Socket[] = [];
+  let port = 0;
+
+  beforeAll(async () => {
+    server = createServer((socket) => {
+      held.push(socket); // hold it open and never write
+      socket.on('error', () => undefined);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    port = (server.address() as AddressInfo).port;
+  });
+  afterAll(async () => {
+    for (const socket of held) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  test('MySQL gives up with the timeout reason', async () => {
+    const pool = createPool(`mysql://root:s3cretpw@127.0.0.1:${port}/outpost`, { connectionLimit: 1, connectTimeoutMs: TIMEOUT_MS });
+    const started = Date.now();
+    try {
+      const failure = await pingDb(pool).then(
+        () => null,
+        (error: unknown) => error as Error,
+      );
+      expect(failure?.message).toBe('MySQL is unreachable (ETIMEDOUT)');
+      expect(Date.now() - started).toBeLessThan(BOUND_MS);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  test('Redis gives up with the timeout reason', async () => {
+    const started = Date.now();
+    const failure = await connectRedis(`redis://:s3cretpw@127.0.0.1:${port}/15`, TIMEOUT_MS).then(
+      () => null,
+      (error: unknown) => error as Error,
+    );
+    expect(failure?.message).toMatch(/^Redis is unreachable [(].*(timed out|timeout).*[)]$/i);
+    expect(failure?.message).not.toContain('s3cretpw');
+    expect(Date.now() - started).toBeLessThan(BOUND_MS);
   });
 });

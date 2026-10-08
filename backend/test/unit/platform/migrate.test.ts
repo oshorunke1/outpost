@@ -38,5 +38,6 @@ describe('loadMigrations', () => {
     const sql = readFileSync(join(MIGRATIONS_DIR, '001_identity.sql'), 'utf8');
     expect(sql).toMatch(/email VARCHAR\(254\) COLLATE utf8mb4_bin NOT NULL/);
     expect(sql).toMatch(/UNIQUE KEY uq_operators_email \(email\)/);
+    expect(sql).toMatch(/client_id VARCHAR[(]40[)] COLLATE utf8mb4_bin NOT NULL PRIMARY KEY/);
   });
 });

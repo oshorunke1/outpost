@@ -14,8 +14,9 @@ CREATE TABLE operators (
   UNIQUE KEY uq_operators_email (email)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
 
+-- Client ids are compared as exact bytes too, for the same reason.
 CREATE TABLE service_clients (
-  client_id VARCHAR(40) NOT NULL PRIMARY KEY,
+  client_id VARCHAR(40) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
   secret_hash VARCHAR(255) NOT NULL,
   scopes JSON NOT NULL,
   disabled BOOLEAN NOT NULL DEFAULT FALSE,

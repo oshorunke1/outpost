@@ -67,7 +67,9 @@ export async function migrate(db: Db, migrations: readonly Migration[]): Promise
       }
       return ran;
     } finally {
-      await conn.query("SELECT RELEASE_LOCK('outpost_migrate')");
+      // MySQL drops the lock when the connection closes, so a failed release must not hide the
+      // real migration error.
+      await conn.query("SELECT RELEASE_LOCK('outpost_migrate')").catch(() => undefined);
     }
   } finally {
     conn.release();
