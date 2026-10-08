@@ -9,6 +9,8 @@ export interface WindowCounts {
 export interface WindowStore {
   // Adds one hit to `key` in window `windowIndex` and returns that window's count plus the previous one's.
   increment(key: string, windowIndex: number, windowMs: number): Promise<WindowCounts>;
+  // The same two counts without adding a hit.
+  read(key: string, windowIndex: number): Promise<WindowCounts>;
 }
 
 export interface HitResult {
@@ -50,6 +52,20 @@ export class SlidingWindowCounter {
     return { allowed, estimate, retryAfterSeconds: allowed ? 0 : this.secondsUntilFree(current, previous, elapsed) };
   }
 
+  // Would one more hit be allowed? Reads the counts without adding one. This is for limits that only
+  // count failures: the caller checks first, before any expensive work, and calls hit() only when
+  // the attempt failed.
+  async peek(key: string): Promise<HitResult> {
+    const { limit, windowMs, clock, store } = this.options;
+    const now = clock.now();
+    const windowIndex = Math.floor(now / windowMs);
+    const elapsed = now - windowIndex * windowMs;
+    const { current, previous } = await store.read(key, windowIndex);
+    const estimate = previous * ((windowMs - elapsed) / windowMs) + current;
+    const allowed = estimate + 1 <= limit + EPSILON;
+    return { allowed, estimate, retryAfterSeconds: allowed ? 0 : this.secondsUntilFree(current, previous, elapsed) };
+  }
+
   // How long until one more hit would be allowed, if the caller stops hitting meanwhile. The caller's
   // next hit counts too, so we need room for current + 1. Rounded up to whole seconds and never
   // below 1, so Retry-After can be late by under a second but never early.
@@ -80,6 +96,9 @@ export function createMemoryWindowStore(): WindowStore {
       counts.delete(`${key}:${windowIndex - 2}`);
       return { current, previous: counts.get(`${key}:${windowIndex - 1}`) ?? 0 };
     },
+    async read(key, windowIndex) {
+      return { current: counts.get(`${key}:${windowIndex}`) ?? 0, previous: counts.get(`${key}:${windowIndex - 1}`) ?? 0 };
+    },
   };
 }
 
@@ -94,6 +113,10 @@ export function createRedisWindowStore(redis: Redis, prefix: string): WindowStor
       if (!results) throw new Error('the rate limit transaction was aborted');
       for (const [error] of results) if (error) throw error;
       return { current: Number(results[0]?.[1]), previous: Number(results[2]?.[1] ?? 0) };
+    },
+    async read(key, windowIndex) {
+      const [current, previous] = await redis.mget(`${prefix}:${key}:${windowIndex}`, `${prefix}:${key}:${windowIndex - 1}`);
+      return { current: Number(current ?? 0), previous: Number(previous ?? 0) };
     },
   };
 }

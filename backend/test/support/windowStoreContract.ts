@@ -23,6 +23,16 @@ export function describeWindowStoreContract(
       await expect(store.increment(key, 11, 60_000)).resolves.toEqual({ current: 1, previous: 2 });
     });
 
+    test('read reports both counts without adding a hit', async () => {
+      const key = randomUUID();
+      await expect(store.read(key, 20)).resolves.toEqual({ current: 0, previous: 0 });
+      await store.increment(key, 20, 60_000);
+      await store.increment(key, 21, 60_000);
+      await expect(store.read(key, 21)).resolves.toEqual({ current: 1, previous: 1 });
+      await expect(store.read(key, 21)).resolves.toEqual({ current: 1, previous: 1 });
+      await expect(store.increment(key, 21, 60_000)).resolves.toEqual({ current: 2, previous: 1 });
+    });
+
     test('keys never share counts', async () => {
       const a = randomUUID();
       const b = randomUUID();

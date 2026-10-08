@@ -5,6 +5,7 @@ import type { TokenService } from './crypto/tokenService.js';
 import { operatorGuard, requireOperator } from './guards.js';
 import { normalizeEmail } from './repos/operatorRepo.js';
 import type { AuthService } from './services/authService.js';
+import type { ServiceTokenService } from './services/serviceTokenService.js';
 
 // Argon2 cost grows with the input, so a cap keeps a huge password from tying up a worker.
 const PASSWORD_MAX = 1024;
@@ -31,7 +32,10 @@ const sessionView = z.object({
 const publicJwk = z.object({ kty: z.string(), n: z.string(), e: z.string(), kid: z.string(), alg: z.string(), use: z.string() });
 const bearer = [{ bearer: [] }];
 
-export function registerIdentityRoutes(app: ZodApp, deps: { tokens: TokenService; auth: AuthService }): void {
+export function registerIdentityRoutes(
+  app: ZodApp,
+  deps: { tokens: TokenService; auth: AuthService; serviceTokens: ServiceTokenService },
+): void {
   const operatorOnly = operatorGuard(deps.auth);
 
   app.post(
@@ -134,5 +138,24 @@ export function registerIdentityRoutes(app: ZodApp, deps: { tokens: TokenService
       void reply.header('cache-control', 'public, max-age=300');
       return { keys: deps.tokens.jwks().keys.map((key) => publicJwk.parse(key)) };
     },
+  );
+
+  // A 401 here carries "WWW-Authenticate: ApiKey", the scheme this route takes.
+  app.post(
+    '/auth/service-token',
+    {
+      schema: {
+        tags: ['identity'],
+        summary: 'Trade a service API key (Authorization: ApiKey opk_<clientId>.<secret>) for a 15 minute scoped token',
+        security: [{ apiKey: [] }],
+        response: {
+          200: z.object({ accessToken: z.string(), tokenType: z.literal('Bearer'), expiresIn: z.number().int(), scope: z.string() }),
+          401: errorBody,
+          429: errorBody,
+          503: errorBody,
+        },
+      },
+    },
+    (request) => deps.serviceTokens.exchange({ authorization: request.headers.authorization, ip: request.ip }),
   );
 }

@@ -291,7 +291,7 @@ describe('rate limits and failing closed', () => {
       command: { name: 'incr', args: [PASSWORD] },
       cause: Object.assign(new Error('socket closed'), { body: { password: PASSWORD } }),
     });
-    const broken: WindowStore = { increment: () => Promise.reject(leakyError) };
+    const broken: WindowStore = { increment: () => Promise.reject(leakyError), read: () => Promise.reject(leakyError) };
     memory = await createMemoryAppDeps({ clock, windowStore: () => broken });
     const loud = await buildApp({ ...memory.deps, config: { ...MEMORY_CONFIG, logLevel: 'info' } }, { logStream: sink });
     const response = await loud.inject({ method: 'POST', url: '/auth/login', payload: { email: EMAIL, password: PASSWORD } });

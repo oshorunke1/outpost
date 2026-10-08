@@ -80,3 +80,7 @@ export class TokenBucketLimiter {
     this.buckets.delete(key);
   }
 }
+
+// Per service client, per backend instance. 50 a second is far above a game server's own
+// HttpService budget (500 a minute), so only a misbehaving or leaked client ever hits it.
+export const API_LIMIT = { capacity: 100, refillPerSecond: 50 } as const;

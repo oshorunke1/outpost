@@ -117,6 +117,7 @@ describe('login limiter', () => {
           seen.push(key);
           return inner.increment(key, windowIndex, windowMs);
         },
+        read: (key, windowIndex) => inner.read(key, windowIndex),
       };
     };
     const { limiter } = make(spy);
@@ -131,7 +132,10 @@ describe('login limiter', () => {
   });
 
   test('a store failure is passed up unchanged, so the caller fails closed', async () => {
-    const broken: WindowStore = { increment: async () => Promise.reject(new Error('redis down')) };
+    const broken: WindowStore = {
+      increment: async () => Promise.reject(new Error('redis down')),
+      read: async () => Promise.reject(new Error('redis down')),
+    };
     const { limiter } = make(() => broken);
     const error = await limiter.check('10.0.0.1', 'a@x.com').then(
       () => undefined,
@@ -151,6 +155,7 @@ describe('login limiter', () => {
         if (calls === 2) throw new Error('redis blip');
         return ok.increment(key, windowIndex, windowMs);
       },
+      read: (key, windowIndex) => ok.read(key, windowIndex),
     };
     const { limiter } = make(() => flaky);
     await expect(limiter.check('10.0.0.1', 'a@x.com')).rejects.toThrow('redis blip');

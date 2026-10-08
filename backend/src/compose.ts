@@ -4,10 +4,19 @@ import type { SigningKey } from './modules/identity/crypto/keys.js';
 import { PRODUCTION_ARGON2, createArgon2Hasher, makeDummyHash } from './modules/identity/crypto/password.js';
 import type { Argon2Params } from './modules/identity/crypto/password.js';
 import { createTokenService } from './modules/identity/crypto/tokenService.js';
-import { LOGIN_LIMITS, REFRESH_LIMIT, createLoginLimiter } from './modules/identity/limiter/loginLimiter.js';
+import {
+  LOGIN_LIMITS,
+  REFRESH_LIMIT,
+  SERVICE_TOKEN_IP_FAILURE_LIMIT,
+  SERVICE_TOKEN_LIMIT,
+  createLoginLimiter,
+} from './modules/identity/limiter/loginLimiter.js';
 import { SlidingWindowCounter, createRedisWindowStore } from './modules/identity/limiter/slidingWindow.js';
+import { API_LIMIT, TokenBucketLimiter } from './modules/identity/limiter/tokenBucket.js';
 import { createMysqlOperatorRepo } from './modules/identity/repos/operatorRepo.js';
+import { createMysqlServiceClientRepo } from './modules/identity/repos/serviceClientRepo.js';
 import { createAuthService } from './modules/identity/services/authService.js';
+import { createServiceTokenService } from './modules/identity/services/serviceTokenService.js';
 import { createRedisIdentityStores } from './modules/identity/stores/redisStores.js';
 import type { Clock } from './platform/clock.js';
 import type { AppConfig } from './platform/config.js';
@@ -40,6 +49,7 @@ export async function createAppDeps(config: AppConfig, infra: Infra, options: Co
   const stores = createRedisIdentityStores(redis);
   const counter = (prefix: string, limits: { limit: number; windowMs: number }) =>
     new SlidingWindowCounter({ ...limits, clock, store: createRedisWindowStore(redis, prefix) });
+  const dummyHash = await makeDummyHash(hasher); // once at boot, never per request
 
   const auth = createAuthService({
     operators: createMysqlOperatorRepo(db, clock),
@@ -47,7 +57,7 @@ export async function createAppDeps(config: AppConfig, infra: Infra, options: Co
     refresh: stores.refresh,
     tokens,
     hasher,
-    dummyHash: await makeDummyHash(hasher), // once at boot, never per request
+    dummyHash,
     loginLimiter: createLoginLimiter({
       perIp: counter('ratelimit:login:ip', LOGIN_LIMITS.perIp),
       perIpAccount: counter('ratelimit:login:ipaccount', LOGIN_LIMITS.perIpAccount),
@@ -57,5 +67,16 @@ export async function createAppDeps(config: AppConfig, infra: Infra, options: Co
     clock,
   });
 
-  return { config, tokens, auth };
+  const serviceTokens = createServiceTokenService({
+    clients: createMysqlServiceClientRepo(db, clock),
+    tokens,
+    hasher,
+    dummyHash,
+    clock,
+    perClient: counter('ratelimit:service-token:client', SERVICE_TOKEN_LIMIT),
+    ipFailures: counter('ratelimit:service-token:ipfail', SERVICE_TOKEN_IP_FAILURE_LIMIT),
+  });
+  const apiLimiter = new TokenBucketLimiter({ ...API_LIMIT, clock });
+
+  return { config, tokens, auth, serviceTokens, apiLimiter };
 }

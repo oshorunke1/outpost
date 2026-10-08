@@ -4,8 +4,12 @@ import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { DestinationStream } from 'pino';
 import type { TokenService } from './modules/identity/crypto/tokenService.js';
+import { serviceGuard } from './modules/identity/guards.js';
+import type { GuardFor } from './modules/identity/guards.js';
+import type { TokenBucketLimiter } from './modules/identity/limiter/tokenBucket.js';
 import { registerIdentityRoutes } from './modules/identity/routes.js';
 import type { AuthService } from './modules/identity/services/authService.js';
+import type { ServiceTokenService } from './modules/identity/services/serviceTokenService.js';
 import type { AppConfig } from './platform/config.js';
 import { registerErrorHandler } from './platform/errors.js';
 import type { ZodApp } from './platform/http.js';
@@ -16,6 +20,8 @@ export interface AppDeps {
   config: AppConfig;
   tokens: TokenService;
   auth: AuthService;
+  serviceTokens: ServiceTokenService;
+  apiLimiter: TokenBucketLimiter;
 }
 
 export interface BuildOptions {
@@ -40,6 +46,8 @@ export async function buildApp(deps: AppDeps, options: BuildOptions = {}): Promi
   app.decorateRequest('principal', null);
   registerErrorHandler(app);
 
+  const guardFor: GuardFor = (scope) => serviceGuard(deps.serviceTokens, deps.apiLimiter, scope);
   registerIdentityRoutes(app, deps);
+  void guardFor; // used by the player, economy, telemetry and flag routes from Task 12 on
   return app;
 }

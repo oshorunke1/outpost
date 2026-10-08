@@ -1,8 +1,11 @@
 import type { FastifyRequest } from 'fastify';
 import { AppError } from '../../platform/errors.js';
 import { bearerToken } from '../../platform/http.js';
-import type { OperatorPrincipal, Principal } from './principal.js';
+import type { TokenBucketLimiter } from './limiter/tokenBucket.js';
+import type { OperatorPrincipal, Principal, ServicePrincipal } from './principal.js';
+import type { Scope } from './scopes.js';
 import type { AuthService } from './services/authService.js';
+import type { ServiceTokenService } from './services/serviceTokenService.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -29,6 +32,41 @@ export function operatorGuard(auth: AuthService) {
       throw error;
     }
   };
+}
+
+export type Guard = (request: FastifyRequest) => Promise<void>;
+export type GuardFor = (scope: Scope) => Guard;
+
+// For routes the game server (or another service client) calls. Any 401 carries the Bearer
+// challenge. A token that is fine but lacks the scope is a 403 that does not say which scope the
+// route wants, and the per-client bucket only runs once the caller is known and allowed.
+export function serviceGuard(serviceTokens: ServiceTokenService, limiter: TokenBucketLimiter, scope: Scope): Guard {
+  return async (request) => {
+    const token = bearerToken(request.headers.authorization);
+    if (!token) throw unauthorized();
+    let principal: ServicePrincipal;
+    try {
+      principal = await serviceTokens.authenticate(token);
+    } catch (error) {
+      if (error instanceof AppError && error.statusCode === 401) throw unauthorized();
+      throw error;
+    }
+    if (!principal.scopes.includes(scope)) {
+      throw new AppError(403, 'insufficient_scope', 'This token cannot use this route');
+    }
+    if (!limiter.allow(principal.clientId)) {
+      throw new AppError(429, 'rate_limited', 'Too many requests', {
+        headers: { 'retry-after': String(limiter.retryAfterSeconds(principal.clientId)) },
+      });
+    }
+    request.principal = principal;
+  };
+}
+
+export function requireService(request: FastifyRequest): ServicePrincipal {
+  const principal = request.principal;
+  if (!principal || principal.kind !== 'service') throw unauthorized();
+  return principal;
 }
 
 export function requireOperator(request: FastifyRequest): OperatorPrincipal {

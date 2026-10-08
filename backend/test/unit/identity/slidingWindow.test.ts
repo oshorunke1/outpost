@@ -36,6 +36,21 @@ describe('SlidingWindowCounter', () => {
     await expect(counter.hit('ip-1')).resolves.toMatchObject({ allowed: true, estimate: 1 });
   });
 
+  test('peek says whether one more hit fits, without counting', async () => {
+    const { counter, clock } = make();
+    for (let i = 0; i < 4; i += 1) await counter.hit('ip-1');
+    await expect(counter.peek('ip-1')).resolves.toMatchObject({ allowed: true, estimate: 4, retryAfterSeconds: 0 });
+    await expect(counter.peek('ip-1')).resolves.toMatchObject({ allowed: true, estimate: 4 }); // peeking never counts
+    await counter.hit('ip-1');
+    const full = await counter.peek('ip-1');
+    expect(full).toMatchObject({ allowed: false, estimate: 5 });
+    // The stated wait is exact: one second less is still full, the stated seconds frees a slot.
+    clock.advance(full.retryAfterSeconds * 1000 - 1000);
+    expect((await counter.peek('ip-1')).allowed).toBe(false);
+    clock.advance(1000);
+    expect((await counter.peek('ip-1')).allowed).toBe(true);
+  });
+
   test('bad settings are refused', () => {
     const clock = createFakeClock();
     const store = createMemoryWindowStore();

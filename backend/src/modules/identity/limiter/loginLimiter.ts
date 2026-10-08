@@ -9,7 +9,11 @@ export const LOGIN_LIMITS = {
   perAccount: { limit: 20, windowMs: 900_000 },
 } as const;
 export const REFRESH_LIMIT = { limit: 60, windowMs: 60_000 } as const;
+// Service token exchange. The per-client limit counts only exchanges whose secret verified, so
+// nobody without the secret can spend the game server's budget. Failed attempts count against the
+// caller's IP only, and an IP over its failure budget is refused before any hash work.
 export const SERVICE_TOKEN_LIMIT = { limit: 30, windowMs: 60_000 } as const;
+export const SERVICE_TOKEN_IP_FAILURE_LIMIT = { limit: 10, windowMs: 300_000 } as const;
 
 export interface LoginLimiter {
   check(ip: string, email: string): Promise<void>;

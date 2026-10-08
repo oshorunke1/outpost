@@ -2,12 +2,23 @@ import type { AppDeps } from './app.js';
 import { FAST_ARGON2, createArgon2Hasher, makeDummyHash } from './modules/identity/crypto/password.js';
 import type { PasswordHasher } from './modules/identity/crypto/password.js';
 import { createTokenService, generateKeyPair } from './modules/identity/crypto/tokenService.js';
-import { LOGIN_LIMITS, REFRESH_LIMIT, createLoginLimiter } from './modules/identity/limiter/loginLimiter.js';
+import {
+  LOGIN_LIMITS,
+  REFRESH_LIMIT,
+  SERVICE_TOKEN_IP_FAILURE_LIMIT,
+  SERVICE_TOKEN_LIMIT,
+  createLoginLimiter,
+} from './modules/identity/limiter/loginLimiter.js';
 import { SlidingWindowCounter, createMemoryWindowStore } from './modules/identity/limiter/slidingWindow.js';
 import type { WindowStore } from './modules/identity/limiter/slidingWindow.js';
+import { API_LIMIT, TokenBucketLimiter } from './modules/identity/limiter/tokenBucket.js';
 import { createMemoryOperatorRepo } from './modules/identity/repos/operatorRepo.js';
 import type { OperatorRepo } from './modules/identity/repos/operatorRepo.js';
+import { createMemoryServiceClientRepo } from './modules/identity/repos/serviceClientRepo.js';
+import type { ServiceClientRepo } from './modules/identity/repos/serviceClientRepo.js';
+import { GAME_SCOPES } from './modules/identity/scopes.js';
 import { createAuthService } from './modules/identity/services/authService.js';
+import { createServiceTokenService } from './modules/identity/services/serviceTokenService.js';
 import { createMemoryIdentityStores } from './modules/identity/stores/memoryStores.js';
 import { systemClock } from './platform/clock.js';
 import type { Clock } from './platform/clock.js';
@@ -32,6 +43,7 @@ export interface MemoryApp {
   deps: AppDeps;
   clock: Clock;
   operators: OperatorRepo;
+  serviceClients: ServiceClientRepo;
   hasher: PasswordHasher;
 }
 
@@ -49,6 +61,7 @@ export async function createMemoryAppDeps(options: MemoryOptions = {}): Promise<
   const operators = createMemoryOperatorRepo();
   const stores = createMemoryIdentityStores(clock);
   const counter = (limits: { limit: number; windowMs: number }) => new SlidingWindowCounter({ ...limits, clock, store: windowStore() });
+  const dummyHash = await makeDummyHash(hasher); // once per app, never per request
 
   const auth = createAuthService({
     operators,
@@ -56,7 +69,7 @@ export async function createMemoryAppDeps(options: MemoryOptions = {}): Promise<
     refresh: stores.refresh,
     tokens,
     hasher,
-    dummyHash: await makeDummyHash(hasher), // once per app, never per request
+    dummyHash,
     loginLimiter: createLoginLimiter({
       perIp: counter(LOGIN_LIMITS.perIp),
       perIpAccount: counter(LOGIN_LIMITS.perIpAccount),
@@ -66,5 +79,26 @@ export async function createMemoryAppDeps(options: MemoryOptions = {}): Promise<
     clock,
   });
 
-  return { deps: { config: MEMORY_CONFIG, tokens, auth }, clock, operators, hasher };
+  // The game-server client exists from the start, with a random secret nobody knows, so tests can
+  // sign game tokens with gameToken(). A test that exchanges a key upserts its own secret.
+  const serviceClients = createMemoryServiceClientRepo();
+  await serviceClients.upsert({ clientId: 'game-server', secretHash: await makeDummyHash(hasher), scopes: GAME_SCOPES });
+  const serviceTokens = createServiceTokenService({
+    clients: serviceClients,
+    tokens,
+    hasher,
+    dummyHash,
+    clock,
+    perClient: counter(SERVICE_TOKEN_LIMIT),
+    ipFailures: counter(SERVICE_TOKEN_IP_FAILURE_LIMIT),
+  });
+  const apiLimiter = new TokenBucketLimiter({ ...API_LIMIT, clock });
+
+  return {
+    deps: { config: MEMORY_CONFIG, tokens, auth, serviceTokens, apiLimiter },
+    clock,
+    operators,
+    serviceClients,
+    hasher,
+  };
 }

@@ -34,7 +34,7 @@ function countingHasher(inner: PasswordHasher): PasswordHasher & { verifies: str
 
 const down = async (): Promise<never> => Promise.reject(new Error('redis down'));
 const brokenSessions: SessionStore = { create: down, get: down, listForOperator: down, delete: down, deleteAllForOperator: down };
-const brokenWindowStore: WindowStore = { increment: down };
+const brokenWindowStore: WindowStore = { increment: down, read: down };
 
 // Wraps a store so a test can make chosen methods fail, then heal it again.
 function switchable<T extends object>(inner: T): { store: T; fail: Set<keyof T> } {
