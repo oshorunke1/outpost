@@ -78,3 +78,15 @@ export function rejectingQueryDb(db: Db, refuse: (sql: string, values: unknown) 
     },
   }));
 }
+
+// Records the values of every matching query on a transaction connection, then runs it unchanged.
+export function spyQueryDb(db: Db, match: RegExp): { db: Db; calls: unknown[] } {
+  const calls: unknown[] = [];
+  const spying = wrapDb(db, (conn) => ({
+    query: async (sql: unknown, values?: unknown) => {
+      if (typeof sql === 'string' && match.test(sql)) calls.push(values);
+      return conn.query(sql as never, values as never);
+    },
+  }));
+  return { db: spying, calls };
+}

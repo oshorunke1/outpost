@@ -8,7 +8,7 @@ import { CommitOutcomeUnknownError, isDuplicateKey } from '../../src/platform/db
 import type { RowDataPacket } from '../../src/platform/db.js';
 import { createIntegrationContext } from './support/context.js';
 import type { IntegrationContext } from './support/context.js';
-import { beforeQueryDb, failingCommitDb, rejectingQueryDb } from './support/failingDb.js';
+import { beforeQueryDb, failingCommitDb, rejectingQueryDb, spyQueryDb } from './support/failingDb.js';
 
 const DAY_MS = 24 * 60 * 60_000;
 const silent = { error: () => undefined };
@@ -75,7 +75,9 @@ describe('telemetry worker on Redis and MySQL', () => {
     const [rows] = await ctx.db.query<RowDataPacket[]>('SELECT metric, bucket_start, dims, dims_hash, event_count, value_sum FROM telemetry_rollups');
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ metric: 'purchase_result', dims: { itemId: 'RedHat', outcome: 'Granted' }, event_count: 2, value_sum: 0 });
-    expect((rows[0]?.bucket_start as Date).getTime()).toBe(Date.UTC(2026, 9, 8, 12, 0, 0));
+    // The stored text, not a read back through the same pool, so a local-time write cannot pass (M3).
+    const [stored] = await ctx.db.query<RowDataPacket[]>("SELECT DATE_FORMAT(bucket_start, '%Y-%m-%d %H:%i:%s') AS t FROM telemetry_rollups");
+    expect(stored[0]?.t).toBe('2026-10-08 12:00:00');
     expect(String(rows[0]?.dims_hash)).toMatch(/^[0-9a-f]{64}$/);
   });
 
@@ -120,6 +122,20 @@ describe('telemetry worker on Redis and MySQL', () => {
     await expect(racing.process(entries)).resolves.toEqual({ applied: 0, duplicates: 3, malformed: 0, deadLettered: 0 });
     expect(await totals()).toEqual({ count: 3, sum: 15 });
     expect(await a.pending()).toBe(0);
+  });
+
+  // M2: whatever order entries arrive in, processed ids are inserted in stream order.
+  test('processed ids are inserted in stream order even when the batch arrives shuffled', async () => {
+    const a = worker('a');
+    await a.ensureGroup();
+    await publish(5);
+    const entries = await a.readNew();
+    const order = entries.map((entry) => entry.id);
+    const shuffled = [entries[3], entries[0], entries[4], entries[2], entries[1]].filter((entry) => entry !== undefined);
+    const spy = spyQueryDb(ctx.db, /^INSERT INTO telemetry_processed/);
+    await expect(worker('a', { db: spy.db }).process(shuffled)).resolves.toMatchObject({ applied: 5 });
+    const [rows] = spy.calls as [unknown[][]][];
+    expect(rows?.[0]?.map((row) => row[0])).toEqual(order);
   });
 
   // R1: each hook commits a processed row for one more of the batch's ids just before this
@@ -278,9 +294,10 @@ describe('telemetry worker on Redis and MySQL', () => {
       await a.ensureGroup();
       await publish(2);
       await a.runOnce();
-      expect(await worker('a', { clock: at(start + DAY_MS - 1_000) }).prune()).toBe(0);
+      // Exactly 24 hours old is still inside the window (strictly older is pruned, M5).
+      expect(await worker('a', { clock: at(start + DAY_MS) }).prune()).toBe(0);
       expect(await countRows('telemetry_processed')).toBe(2);
-      expect(await worker('a', { clock: at(start + DAY_MS + 1_000) }).prune()).toBe(2);
+      expect(await worker('a', { clock: at(start + DAY_MS + 1) }).prune()).toBe(2);
       expect(await countRows('telemetry_processed')).toBe(0);
     });
 
