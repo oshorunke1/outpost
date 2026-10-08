@@ -51,16 +51,16 @@ export function lockWaitTimeoutDb(db: Db): { db: Db; attempts: () => number } {
   return { db: failing, attempts: () => attempts };
 }
 
-// Runs hook once, just before the first query on a transaction connection whose SQL matches. Used
-// to let another writer commit in the gap between a transaction's read and its write.
-export function beforeQueryDb(db: Db, match: RegExp, hook: () => Promise<void>): Db {
-  let fired = false;
+type Hook = () => Promise<void>;
+
+// Runs hooks[n] just before the (n+1)th query on a transaction connection whose SQL matches, so
+// one hook per matching query; a single hook fires once. Used to let another writer commit in the
+// gap between a transaction's read and its write.
+export function beforeQueryDb(db: Db, match: RegExp, hooks: Hook | readonly Hook[]): Db {
+  const queue = typeof hooks === 'function' ? [hooks] : [...hooks];
   return wrapDb(db, (conn) => ({
     query: async (sql: unknown, values?: unknown) => {
-      if (!fired && typeof sql === 'string' && match.test(sql)) {
-        fired = true;
-        await hook();
-      }
+      if (typeof sql === 'string' && match.test(sql)) await queue.shift()?.();
       return conn.query(sql as never, values as never);
     },
   }));

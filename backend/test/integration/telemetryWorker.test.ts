@@ -102,7 +102,7 @@ describe('telemetry worker on Redis and MySQL', () => {
 
   // S4-F2: no FOR UPDATE. Another worker commits the same ids between this transaction's read and
   // its insert, the insert hits ER_DUP_ENTRY, and the rerun counts them as duplicates.
-  test('a duplicate key on the processed ids reruns the batch once and counts them as duplicates', async () => {
+  test('a duplicate key on the processed ids reruns the batch and counts them as duplicates', async () => {
     const a = worker('a');
     await a.ensureGroup();
     await publish(3);
@@ -118,6 +118,39 @@ describe('telemetry worker on Redis and MySQL', () => {
     await expect(racing.process(entries)).resolves.toEqual({ applied: 0, duplicates: 3, malformed: 0 });
     expect(await totals()).toEqual({ count: 3, sum: 15 });
     expect(await a.pending()).toBe(0);
+  });
+
+  // R1: each hook commits a processed row for one more of the batch's ids just before this
+  // transaction inserts, the way another worker that also holds the entry would.
+  const commitProcessed = (id: string) => async () => {
+    await ctx.db.query('INSERT INTO telemetry_processed (entry_id, processed_at) VALUES (?, UTC_TIMESTAMP(3))', [id]);
+  };
+  const collidingWorker = (ids: readonly string[]) =>
+    worker('a', { db: beforeQueryDb(ctx.db, /^INSERT INTO telemetry_processed/, ids.map(commitProcessed)) });
+
+  test('two duplicate collisions in a row still succeed on the third attempt with exact totals', async () => {
+    const a = worker('a');
+    await a.ensureGroup();
+    await publish(4);
+    const entries = await a.readNew();
+    const ids = entries.map((entry) => entry.id);
+    await expect(collidingWorker([ids[0] ?? '', ids[1] ?? '']).process(entries)).resolves.toEqual({ applied: 2, duplicates: 2, malformed: 0 });
+    expect(await totals()).toEqual({ count: 2, sum: 10 }); // the two committed elsewhere are not counted here
+    expect(await countRows('telemetry_processed')).toBe(4);
+    expect(await a.pending()).toBe(0);
+  });
+
+  test('a third duplicate collision rejects and acks nothing', async () => {
+    const a = worker('a');
+    await a.ensureGroup();
+    await publish(4);
+    const entries = await a.readNew();
+    const ids = entries.map((entry) => entry.id);
+    const error: unknown = await collidingWorker([ids[0] ?? '', ids[1] ?? '', ids[2] ?? '']).process(entries).catch((e: unknown) => e);
+    expect(isDuplicateKey(error)).toBe(true);
+    expect(await a.pending()).toBe(4);
+    expect(await countRows('telemetry_rollups')).toBe(0);
+    expect(await countRows('telemetry_processed')).toBe(3); // only the three the other writer committed
   });
 
   // S4-F9 (a): the ack only ever follows a commit.
@@ -237,8 +270,8 @@ describe('telemetry worker on Redis and MySQL', () => {
     for (let i = 0; i < 4; i += 1) await publish(500);
     const before = await deadlocks();
     const deadline = Date.now() + 20_000;
-    // A run loop's job: when the one rerun after ER_DUP_ENTRY collides again (a third worker
-    // committed more of the same ids), runOnce rejects, nothing was acked, and the entries come
+    // A run loop's job: if all three tries after ER_DUP_ENTRY collide (other workers kept
+    // committing more of the same ids), runOnce rejects, nothing was acked, and the entries come
     // back through XAUTOCLAIM. Any other error fails the test.
     const drain = async (w: (typeof workers)[number]): Promise<ProcessResult> => {
       const sum: ProcessResult = { applied: 0, duplicates: 0, malformed: 0 };

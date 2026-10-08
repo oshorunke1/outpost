@@ -12,6 +12,9 @@ export const GROUP = 'rollup';
 // prune stops after this many DELETE passes in one call, so one call never runs unbounded.
 export const MAX_PRUNE_PASSES = 50;
 
+// Tries in all (the first plus two reruns) when the processed-id insert hits ER_DUP_ENTRY (S4-F2).
+export const DUP_ATTEMPTS = 3;
+
 export interface StreamEntry {
   id: string;
   event: TelemetryEvent | null; // null when the payload is missing or invalid
@@ -150,14 +153,17 @@ export function createTelemetryWorker(deps: WorkerDeps): TelemetryWorker {
     const valid = [...byId].sort(([a], [b]) => compareStreamIds(a, b));
     let applied = 0;
     if (valid.length > 0) {
-      try {
-        applied = await applyBatch(valid);
-      } catch (error) {
-        // Another worker committed some of these ids after this transaction read them. The rerun
-        // sees them and counts them as duplicates. A second failure propagates and nothing is
-        // acked, so the batch comes back later through XAUTOCLAIM.
-        if (!isDuplicateKey(error)) throw error;
-        applied = await applyBatch(valid);
+      // ER_DUP_ENTRY means another worker committed some of these ids after this transaction read
+      // them. Each rerun is a fresh transaction that sees them and counts them as duplicates, so
+      // the fresh set only shrinks. After DUP_ATTEMPTS tries the error propagates, nothing is
+      // acked, and the batch comes back later through XAUTOCLAIM.
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          applied = await applyBatch(valid);
+          break;
+        } catch (error) {
+          if (!isDuplicateKey(error) || attempt >= DUP_ATTEMPTS) throw error;
+        }
       }
     }
     // Only after the commit. Malformed entries are acked too, so one poison entry can never block
