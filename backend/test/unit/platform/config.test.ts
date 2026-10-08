@@ -57,9 +57,41 @@ describe('loadConfig', () => {
     expect(message).not.toContain('secret-material');
   });
 
-  test('TRUST_PROXY only accepts true or false', () => {
-    expect(loadConfig({ ...base, TRUST_PROXY: 'true' }).trustProxy).toBe(true);
-    expect(messageOf({ ...base, TRUST_PROXY: 'yes' })).toContain('TRUST_PROXY');
+  // S2-F5: X-Forwarded-For is ignored unless the deployment says which proxies to believe.
+  test('TRUST_PROXY defaults to trusting no proxy', () => {
+    expect(loadConfig(base).trustProxy).toBe(false);
+    expect(loadConfig({ ...base, TRUST_PROXY: 'false' }).trustProxy).toBe(false);
+    expect(loadConfig({ ...base, TRUST_PROXY: '' }).trustProxy).toBe(false);
+  });
+
+  test('TRUST_PROXY takes a hop count', () => {
+    expect(loadConfig({ ...base, TRUST_PROXY: '1' }).trustProxy).toBe(1);
+    expect(loadConfig({ ...base, TRUST_PROXY: '3' }).trustProxy).toBe(3);
+  });
+
+  test('TRUST_PROXY takes a comma separated list of addresses and CIDR ranges', () => {
+    expect(loadConfig({ ...base, TRUST_PROXY: '10.0.0.0/8, 192.168.1.7 ,::1,fd00::/8' }).trustProxy).toEqual([
+      '10.0.0.0/8',
+      '192.168.1.7',
+      '::1',
+      'fd00::/8',
+    ]);
+  });
+
+  test.each([
+    ['true'], // trusting every hop would let any client pick its own IP
+    ['yes'],
+    ['0'],
+    ['-1'],
+    ['1.5'],
+    ['33'],
+    ['10.0.0.0/33'],
+    ['::1/129'],
+    ['10.0.0.0/8,'],
+    ['300.1.1.1'],
+    ['10.0.0.0/8,not-an-ip'],
+  ])('TRUST_PROXY refuses %j and names the variable', (value) => {
+    expect(messageOf({ ...base, TRUST_PROXY: value })).toContain('TRUST_PROXY');
   });
 
   test('production refuses to start without a signing key', () => {
