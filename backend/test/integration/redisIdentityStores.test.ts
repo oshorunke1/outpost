@@ -1,0 +1,42 @@
+import { randomUUID } from 'node:crypto';
+import { expect, test } from 'vitest';
+import { createRedisIdentityStores } from '../../src/modules/identity/stores/redisStores.js';
+import { describeIdentityStoreContract } from '../support/identityStoreContract.js';
+import { createIntegrationContext } from './support/context.js';
+
+describeIdentityStoreContract('redis', async () => {
+  const ctx = await createIntegrationContext();
+  return { stores: createRedisIdentityStores(ctx.redis), teardown: () => ctx.close() };
+});
+
+test('redis keeps only hashes, and superseded hashes live exactly as long as their family', async () => {
+  const ctx = await createIntegrationContext();
+  try {
+    const stores = createRedisIdentityStores(ctx.redis);
+    const familyId = randomUUID();
+    await stores.refresh.create({ familyId, sessionId: randomUUID(), operatorId: randomUUID(), tokenVersion: 1, currentHash: 'h0' }, 3600);
+    await stores.refresh.rotate(familyId, 'h0', 'h1');
+    const familyTtl = await ctx.redis.pttl(`refresh:{${familyId}}`);
+    const supersededTtl = await ctx.redis.pttl(`refresh:{${familyId}}:superseded`);
+    expect(familyTtl).toBeGreaterThan(3_590_000);
+    expect(supersededTtl).toBeGreaterThan(0);
+    expect(supersededTtl).toBeLessThanOrEqual(familyTtl);
+    expect(familyTtl - supersededTtl).toBeLessThan(1_000);
+    await expect(ctx.redis.lrange(`refresh:{${familyId}}:superseded`, 0, -1)).resolves.toEqual(['h0']);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('a Redis error is passed up from every store call, never read as empty', async () => {
+  const ctx = await createIntegrationContext();
+  const stores = createRedisIdentityStores(ctx.redis);
+  ctx.redis.disconnect(); // no offline queue, so every command now fails at once
+  try {
+    await expect(stores.sessions.get(randomUUID())).rejects.toThrow();
+    await expect(stores.refresh.get(randomUUID())).rejects.toThrow();
+    await expect(stores.refresh.rotate(randomUUID(), 'a', 'b')).rejects.toThrow();
+  } finally {
+    await ctx.close().catch(() => undefined);
+  }
+});
