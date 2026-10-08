@@ -221,7 +221,9 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       // Checking the session makes logout take effect at once instead of when the token expires.
       const session = await failClosed(() => deps.sessions.get(sessionId));
       if (!session || session.operatorId !== operator.id) throw unauthorized();
-      return { kind: 'operator', operatorId: operator.id, sessionId, scopes: claims.scopes };
+      // Scopes come from the operator row, not the token, so pulling a scope takes effect on the
+      // very next request instead of when the token expires.
+      return { kind: 'operator', operatorId: operator.id, sessionId, scopes: [...operator.scopes] };
     },
   };
 }

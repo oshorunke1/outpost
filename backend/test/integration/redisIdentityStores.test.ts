@@ -40,3 +40,37 @@ test('a Redis error is passed up from every store call, never read as empty', as
     await ctx.close().catch(() => undefined);
   }
 });
+
+// logoutAll lists the sessions, then deletes them. A login that lands in between must stay in the
+// operator's index, or it would vanish from the session list and dodge the next logoutAll.
+test('deleteAllForOperator keeps a session created while it runs in the index', async () => {
+  const ctx = await createIntegrationContext();
+  try {
+    const real = createRedisIdentityStores(ctx.redis);
+    const operatorId = randomUUID();
+    const record = (sessionId: string) => ({ sessionId, operatorId, familyId: randomUUID(), createdAt: 1, userAgent: 'ua', ip: '10.0.0.1' });
+    const early = record(randomUUID());
+    const late = record(randomUUID());
+    await real.sessions.create(early, 3600);
+    // A client whose SMEMBERS reply is followed by a concurrent login before the delete runs.
+    const racing = new Proxy(ctx.redis, {
+      get(target, property, receiver) {
+        if (property === 'smembers') {
+          return async (key: string) => {
+            const ids = await target.smembers(key);
+            await real.sessions.create(late, 3600);
+            return ids;
+          };
+        }
+        const value: unknown = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+    const ended = await createRedisIdentityStores(racing).sessions.deleteAllForOperator(operatorId);
+    expect(ended.map((s) => s.sessionId)).toEqual([early.sessionId]);
+    await expect(ctx.redis.smembers(`user:${operatorId}:sessions`)).resolves.toEqual([late.sessionId]);
+    await expect(real.sessions.listForOperator(operatorId)).resolves.toEqual([late]);
+  } finally {
+    await ctx.close();
+  }
+});

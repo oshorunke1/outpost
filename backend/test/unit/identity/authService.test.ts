@@ -342,6 +342,26 @@ describe('AuthService authenticate', () => {
     await expectAppError(auth.authenticate(pair.accessToken), 401, 'unauthorized');
   });
 
+  // Scopes come from the operator row on every request, not from the token, so pulling a scope
+  // takes effect on the next call instead of when the 15 minute token expires.
+  test('scopes come from the operator row, so a revoked scope is gone at once', async () => {
+    const reduced = ['admin:read'];
+    let narrowed = false;
+    const { auth, login } = await setup({
+      operators: (inner) => ({
+        ...inner,
+        findById: async (id) => {
+          const found = await inner.findById(id);
+          return found && narrowed ? { ...found, scopes: reduced } : found;
+        },
+      }),
+    });
+    const pair = await login();
+    await expect(auth.authenticate(pair.accessToken)).resolves.toMatchObject({ scopes: [...OPERATOR_SCOPES] });
+    narrowed = true;
+    await expect(auth.authenticate(pair.accessToken)).resolves.toMatchObject({ scopes: reduced });
+  });
+
   test('garbage, service tokens and tokens without a session are rejected', async () => {
     const { auth, tokens, operator } = await setup();
     await expectAppError(auth.authenticate('not.a.jwt'), 401, 'unauthorized');

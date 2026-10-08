@@ -116,9 +116,12 @@ export function createRedisIdentityStores(redis: Redis): IdentityStores {
       },
       async deleteAllForOperator(operatorId) {
         const all = await listForOperator(operatorId);
+        if (all.length === 0) return [];
+        // SREM only the ids we listed. DEL on the whole index would also drop a session that a
+        // concurrent login added after the list, and that session would then never be listed.
         const transaction = redis.multi();
         for (const s of all) transaction.del(sessionKey(s.sessionId));
-        transaction.del(operatorSessionsKey(operatorId));
+        transaction.srem(operatorSessionsKey(operatorId), ...all.map((s) => s.sessionId));
         settle(await transaction.exec());
         return all;
       },
