@@ -1,0 +1,61 @@
+import type { AppDeps } from './app.js';
+import { generateKeyPair, importSigningKey } from './modules/identity/crypto/keys.js';
+import type { SigningKey } from './modules/identity/crypto/keys.js';
+import { PRODUCTION_ARGON2, createArgon2Hasher, makeDummyHash } from './modules/identity/crypto/password.js';
+import type { Argon2Params } from './modules/identity/crypto/password.js';
+import { createTokenService } from './modules/identity/crypto/tokenService.js';
+import { LOGIN_LIMITS, REFRESH_LIMIT, createLoginLimiter } from './modules/identity/limiter/loginLimiter.js';
+import { SlidingWindowCounter, createRedisWindowStore } from './modules/identity/limiter/slidingWindow.js';
+import { createMysqlOperatorRepo } from './modules/identity/repos/operatorRepo.js';
+import { createAuthService } from './modules/identity/services/authService.js';
+import { createRedisIdentityStores } from './modules/identity/stores/redisStores.js';
+import type { Clock } from './platform/clock.js';
+import type { AppConfig } from './platform/config.js';
+import type { Db } from './platform/db.js';
+import type { Redis } from './platform/redis.js';
+
+export interface Infra {
+  db: Db;
+  redis: Redis;
+  clock: Clock;
+}
+
+export interface ComposeOptions {
+  argon2?: Argon2Params; // integration tests pass FAST_ARGON2; everything else gets PRODUCTION_ARGON2
+}
+
+// Production loads the PEM from JWT_PRIVATE_KEY_PEM (loadConfig already insists on it, and this
+// checks again). Development and tests get a fresh key per process that only ever lives in memory,
+// so nothing is written to disk and tokens do not survive a restart there.
+export async function loadSigningKey(config: AppConfig): Promise<SigningKey> {
+  if (config.jwtPrivateKeyPem) return importSigningKey(config.jwtPrivateKeyPem);
+  if (config.nodeEnv === 'production') throw new Error('JWT_PRIVATE_KEY_PEM is required in production');
+  return generateKeyPair();
+}
+
+export async function createAppDeps(config: AppConfig, infra: Infra, options: ComposeOptions = {}): Promise<AppDeps> {
+  const { db, redis, clock } = infra;
+  const hasher = createArgon2Hasher(options.argon2 ?? PRODUCTION_ARGON2);
+  const tokens = createTokenService(await loadSigningKey(config), { issuer: config.jwtIssuer, now: () => clock.now() });
+  const stores = createRedisIdentityStores(redis);
+  const counter = (prefix: string, limits: { limit: number; windowMs: number }) =>
+    new SlidingWindowCounter({ ...limits, clock, store: createRedisWindowStore(redis, prefix) });
+
+  const auth = createAuthService({
+    operators: createMysqlOperatorRepo(db, clock),
+    sessions: stores.sessions,
+    refresh: stores.refresh,
+    tokens,
+    hasher,
+    dummyHash: await makeDummyHash(hasher), // once at boot, never per request
+    loginLimiter: createLoginLimiter({
+      perIp: counter('ratelimit:login:ip', LOGIN_LIMITS.perIp),
+      perIpAccount: counter('ratelimit:login:ipaccount', LOGIN_LIMITS.perIpAccount),
+      perAccount: counter('ratelimit:login:account', LOGIN_LIMITS.perAccount),
+    }),
+    refreshLimiter: counter('ratelimit:refresh', REFRESH_LIMIT),
+    clock,
+  });
+
+  return { config, tokens, auth };
+}
