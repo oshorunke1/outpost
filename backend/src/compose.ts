@@ -1,6 +1,8 @@
 import { pino } from 'pino';
 import type { AppDeps } from './app.js';
 import { createLedgerService } from './modules/economy/ledger.js';
+import { createMysqlFlagsService } from './modules/flags/flagsService.js';
+import type { FlagsLogger } from './modules/flags/flagsService.js';
 import { generateKeyPair, importSigningKey } from './modules/identity/crypto/keys.js';
 import type { SigningKey } from './modules/identity/crypto/keys.js';
 import { PRODUCTION_ARGON2, createArgon2Hasher, makeDummyHash } from './modules/identity/crypto/password.js';
@@ -39,6 +41,8 @@ export interface ComposeOptions {
   // Where the ledger reports a lost COMMIT or a failed rollback. Defaults to a logger with the
   // app's level, redaction and service name on stdout; tests pass one they can read.
   logger?: TransactionLogger;
+  // Where the flags service warns about a failed reload or a bad stored value. Same default as logger.
+  flagsLogger?: FlagsLogger;
 }
 
 // Production loads the PEM from JWT_PRIVATE_KEY_PEM (loadConfig already insists on it, and this
@@ -88,7 +92,8 @@ export async function createAppDeps(config: AppConfig, infra: Infra, options: Co
   });
   const apiLimiter = new TokenBucketLimiter({ ...API_LIMIT, clock });
 
-  const logger = options.logger ?? pino(loggerOptions(config.logLevel)).child({ module: 'ledger' });
+  const baseLogger = pino(loggerOptions(config.logLevel));
+  const logger = options.logger ?? baseLogger.child({ module: 'ledger' });
   const ledger = createLedgerService(db, clock, { logger });
 
   return {
@@ -101,5 +106,6 @@ export async function createAppDeps(config: AppConfig, infra: Infra, options: Co
     ledger,
     clock,
     telemetry: createRedisTelemetryProducer(redis),
+    flags: createMysqlFlagsService(db, clock, { logger: options.flagsLogger ?? baseLogger.child({ module: 'flags' }) }),
   };
 }

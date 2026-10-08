@@ -5,6 +5,8 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { DestinationStream } from 'pino';
 import type { LedgerService } from './modules/economy/ledger.js';
 import { registerEconomyRoutes } from './modules/economy/routes.js';
+import type { FlagsService } from './modules/flags/flagsService.js';
+import { registerFlagRoutes } from './modules/flags/routes.js';
 import type { TokenService } from './modules/identity/crypto/tokenService.js';
 import { serviceGuard } from './modules/identity/guards.js';
 import type { ApiGroup, GuardFor } from './modules/identity/guards.js';
@@ -33,6 +35,7 @@ export interface AppDeps {
   ledger: LedgerService;
   clock: Clock;
   telemetry: TelemetryProducer;
+  flags: FlagsService;
 }
 
 export interface BuildOptions {
@@ -67,5 +70,6 @@ export async function buildApp(deps: AppDeps, options: BuildOptions = {}): Promi
   registerPlayerRoutes(app, { players: deps.players, guardFor });
   registerEconomyRoutes(app, { ledger: deps.ledger, guardFor });
   registerTelemetryRoutes(app, { telemetry: deps.telemetry, clock: deps.clock, guardFor });
+  registerFlagRoutes(app, { flags: deps.flags, guardFor });
   return app;
 }

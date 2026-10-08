@@ -1,5 +1,6 @@
 import type { AppDeps } from './app.js';
 import type { LedgerService } from './modules/economy/ledger.js';
+import { createMemoryFlagsService } from './modules/flags/flagsService.js';
 import { FAST_ARGON2, createArgon2Hasher, makeDummyHash } from './modules/identity/crypto/password.js';
 import type { PasswordHasher } from './modules/identity/crypto/password.js';
 import { createTokenService, generateKeyPair } from './modules/identity/crypto/tokenService.js';
@@ -129,6 +130,7 @@ export async function createMemoryAppDeps(options: MemoryOptions = {}): Promise<
       ledger: unavailableLedger,
       clock,
       telemetry,
+      flags: createMemoryFlagsService(),
       ...options.overrides,
     },
     clock,
