@@ -7,13 +7,16 @@ import type { LedgerService } from './modules/economy/ledger.js';
 import { registerEconomyRoutes } from './modules/economy/routes.js';
 import type { TokenService } from './modules/identity/crypto/tokenService.js';
 import { serviceGuard } from './modules/identity/guards.js';
-import type { GuardFor } from './modules/identity/guards.js';
-import type { TokenBucketLimiter } from './modules/identity/limiter/tokenBucket.js';
+import type { ApiGroup, GuardFor } from './modules/identity/guards.js';
+import { TokenBucketLimiter } from './modules/identity/limiter/tokenBucket.js';
 import { registerIdentityRoutes } from './modules/identity/routes.js';
 import type { AuthService } from './modules/identity/services/authService.js';
 import type { ServiceTokenService } from './modules/identity/services/serviceTokenService.js';
 import type { PlayersService } from './modules/players/playersService.js';
 import { registerPlayerRoutes } from './modules/players/routes.js';
+import type { TelemetryProducer } from './modules/telemetry/producer.js';
+import { registerTelemetryRoutes } from './modules/telemetry/routes.js';
+import type { Clock } from './platform/clock.js';
 import type { AppConfig } from './platform/config.js';
 import { registerErrorHandler } from './platform/errors.js';
 import type { ZodApp } from './platform/http.js';
@@ -28,6 +31,8 @@ export interface AppDeps {
   apiLimiter: TokenBucketLimiter;
   players: PlayersService;
   ledger: LedgerService;
+  clock: Clock;
+  telemetry: TelemetryProducer;
 }
 
 export interface BuildOptions {
@@ -52,9 +57,15 @@ export async function buildApp(deps: AppDeps, options: BuildOptions = {}): Promi
   app.decorateRequest('principal', null);
   registerErrorHandler(app);
 
-  const guardFor: GuardFor = (scope) => serviceGuard(deps.serviceTokens, deps.apiLimiter, scope);
+  // One bucket per group. Telemetry's is per instance like apiLimiter, sized from TELEMETRY_API_LIMIT.
+  const limiters: Record<ApiGroup, TokenBucketLimiter> = {
+    default: deps.apiLimiter,
+    telemetry: new TokenBucketLimiter({ ...deps.config.telemetryApiLimit, clock: deps.clock }),
+  };
+  const guardFor: GuardFor = (scope, group = 'default') => serviceGuard(deps.serviceTokens, limiters[group], scope, group);
   registerIdentityRoutes(app, deps);
   registerPlayerRoutes(app, { players: deps.players, guardFor });
   registerEconomyRoutes(app, { ledger: deps.ledger, guardFor });
+  registerTelemetryRoutes(app, { telemetry: deps.telemetry, clock: deps.clock, guardFor });
   return app;
 }

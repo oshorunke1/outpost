@@ -23,6 +23,8 @@ import { createAuthService } from './modules/identity/services/authService.js';
 import { createServiceTokenService } from './modules/identity/services/serviceTokenService.js';
 import { createMemoryIdentityStores } from './modules/identity/stores/memoryStores.js';
 import { createMemoryPlayersService } from './modules/players/playersService.js';
+import { createMemoryTelemetryProducer } from './modules/telemetry/producer.js';
+import type { MemoryTelemetryProducer } from './modules/telemetry/producer.js';
 import { systemClock } from './platform/clock.js';
 import type { Clock } from './platform/clock.js';
 import type { AppConfig } from './platform/config.js';
@@ -50,6 +52,8 @@ export interface MemoryApp {
   operators: OperatorRepo;
   serviceClients: ServiceClientRepo;
   hasher: PasswordHasher;
+  // Every event the telemetry route published, in order. Tests read it.
+  telemetry: MemoryTelemetryProducer;
 }
 
 export interface MemoryOptions {
@@ -112,6 +116,7 @@ export async function createMemoryAppDeps(options: MemoryOptions = {}): Promise<
     blockedVerify: new TokenBucketLimiter({ ...BLOCKED_VERIFY_LIMIT, clock }),
   });
   const apiLimiter = new TokenBucketLimiter({ ...API_LIMIT, clock });
+  const telemetry = createMemoryTelemetryProducer();
 
   return {
     deps: {
@@ -122,11 +127,14 @@ export async function createMemoryAppDeps(options: MemoryOptions = {}): Promise<
       apiLimiter,
       players: createMemoryPlayersService(),
       ledger: unavailableLedger,
+      clock,
+      telemetry,
       ...options.overrides,
     },
     clock,
     operators,
     serviceClients,
     hasher,
+    telemetry,
   };
 }

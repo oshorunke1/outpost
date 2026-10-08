@@ -21,6 +21,7 @@ import { createAuthService } from './modules/identity/services/authService.js';
 import { createServiceTokenService } from './modules/identity/services/serviceTokenService.js';
 import { createRedisIdentityStores } from './modules/identity/stores/redisStores.js';
 import { createMysqlPlayersService } from './modules/players/playersService.js';
+import { createRedisTelemetryProducer } from './modules/telemetry/producer.js';
 import type { Clock } from './platform/clock.js';
 import type { AppConfig } from './platform/config.js';
 import type { Db, TransactionLogger } from './platform/db.js';
@@ -90,5 +91,15 @@ export async function createAppDeps(config: AppConfig, infra: Infra, options: Co
   const logger = options.logger ?? pino(loggerOptions(config.logLevel)).child({ module: 'ledger' });
   const ledger = createLedgerService(db, clock, { logger });
 
-  return { config, tokens, auth, serviceTokens, apiLimiter, players: createMysqlPlayersService(db, clock), ledger };
+  return {
+    config,
+    tokens,
+    auth,
+    serviceTokens,
+    apiLimiter,
+    players: createMysqlPlayersService(db, clock),
+    ledger,
+    clock,
+    telemetry: createRedisTelemetryProducer(redis),
+  };
 }
