@@ -26,7 +26,20 @@ describe('loadConfig', () => {
       jwtPrivateKeyPem: null,
       logLevel: 'info',
       trustProxy: false,
+      telemetryApiLimit: { capacity: 200, refillPerSecond: 150 },
     });
+  });
+
+  // S4-F5: the telemetry route has its own bucket, sized from TELEMETRY_API_LIMIT.
+  test('TELEMETRY_API_LIMIT takes capacity:refill per second', () => {
+    expect(loadConfig({ ...base, TELEMETRY_API_LIMIT: '50:12.5' }).telemetryApiLimit).toEqual({ capacity: 50, refillPerSecond: 12.5 });
+  });
+
+  test.each([['200'], ['0:10'], ['10:0'], ['-1:5'], ['a:b'], ['10:5:1'], ['1e3:5']])('TELEMETRY_API_LIMIT refuses %j and says the format', (value) => {
+    const message = messageOf({ ...base, TELEMETRY_API_LIMIT: value });
+    expect(message).toContain('TELEMETRY_API_LIMIT');
+    expect(message).toContain('<capacity>:<refill per second>');
+    expect(message).not.toContain(`"${value}"`);
   });
 
   test('names every bad variable and never echoes a value', () => {

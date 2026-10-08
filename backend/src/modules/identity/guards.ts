@@ -35,12 +35,21 @@ export function operatorGuard(auth: AuthService) {
 }
 
 export type Guard = (request: FastifyRequest) => Promise<void>;
-export type GuardFor = (scope: Scope) => Guard;
+// Which per-client bucket a route spends. Each group is its own bucket, so a flood on one group (say
+// telemetry) never spends the bucket the others need.
+export const API_GROUPS = ['default', 'telemetry'] as const;
+export type ApiGroup = (typeof API_GROUPS)[number];
+export type GuardFor = (scope: Scope, group?: ApiGroup) => Guard;
+
+// The default group keeps the plain clientId key it has always had; other groups get clientId:group.
+export function limiterKey(clientId: string, group: ApiGroup = 'default'): string {
+  return group === 'default' ? clientId : `${clientId}:${group}`;
+}
 
 // For routes the game server (or another service client) calls. Any 401 carries the Bearer
 // challenge. A token that is fine but lacks the scope is a 403 that does not say which scope the
 // route wants, and the per-client bucket only runs once the caller is known and allowed.
-export function serviceGuard(serviceTokens: ServiceTokenService, limiter: TokenBucketLimiter, scope: Scope): Guard {
+export function serviceGuard(serviceTokens: ServiceTokenService, limiter: TokenBucketLimiter, scope: Scope, group: ApiGroup = 'default'): Guard {
   return async (request) => {
     const token = bearerToken(request.headers.authorization);
     if (!token) throw unauthorized();
@@ -54,9 +63,10 @@ export function serviceGuard(serviceTokens: ServiceTokenService, limiter: TokenB
     if (!principal.scopes.includes(scope)) {
       throw new AppError(403, 'insufficient_scope', 'This token cannot use this route');
     }
-    if (!limiter.allow(principal.clientId)) {
+    const key = limiterKey(principal.clientId, group);
+    if (!limiter.allow(key)) {
       throw new AppError(429, 'rate_limited', 'Too many requests', {
-        headers: { 'retry-after': String(limiter.retryAfterSeconds(principal.clientId)) },
+        headers: { 'retry-after': String(limiter.retryAfterSeconds(key)) },
       });
     }
     request.principal = principal;

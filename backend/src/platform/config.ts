@@ -22,6 +22,14 @@ export interface AppConfig {
   jwtPrivateKeyPem: string | null;
   logLevel: LogLevel;
   trustProxy: TrustProxy;
+  // The telemetry route's own per-client token bucket, so a telemetry flood never spends the
+  // bucket the economy and player routes use.
+  telemetryApiLimit: BucketLimit;
+}
+
+export interface BucketLimit {
+  capacity: number;
+  refillPerSecond: number;
 }
 
 export class ConfigError extends Error {
@@ -51,6 +59,16 @@ function parseTrustProxy(raw: string): TrustProxy | null {
   return entries.every(isAddressOrCidr) ? entries : null;
 }
 
+const BUCKET_LIMIT_HINT = 'TELEMETRY_API_LIMIT must be <capacity>:<refill per second>, both positive, for example 200:150';
+
+function parseBucketLimit(raw: string): BucketLimit | null {
+  const match = /^\s*(\d{1,7}):(\d{1,7}(?:\.\d{1,3})?)\s*$/.exec(raw);
+  if (!match) return null;
+  const capacity = Number(match[1]);
+  const refillPerSecond = Number(match[2]);
+  return capacity >= 1 && refillPerSecond > 0 ? { capacity, refillPerSecond } : null;
+}
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   HOST: z.string().min(1).default('0.0.0.0'),
@@ -72,6 +90,17 @@ const envSchema = z.object({
       }
       return parsed;
     }),
+  TELEMETRY_API_LIMIT: z
+    .string()
+    .default('200:150')
+    .transform((raw, context) => {
+      const parsed = parseBucketLimit(raw);
+      if (parsed === null) {
+        context.addIssue({ code: 'custom', message: BUCKET_LIMIT_HINT });
+        return z.NEVER;
+      }
+      return parsed;
+    }),
 });
 
 // Reads the environment once at startup. Errors name the variables but never their values,
@@ -81,8 +110,11 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
   if (!parsed.success) {
     const names = [...new Set(parsed.error.issues.map((issue) => String(issue.path[0])))].sort();
     // The hint is a fixed sentence, so it never echoes the value that was set.
-    const hint = names.includes('TRUST_PROXY') ? `. ${TRUST_PROXY_HINT}` : '';
-    throw new ConfigError(`invalid or missing environment variables: ${names.join(', ')}${hint}`);
+    const hints = [names.includes('TRUST_PROXY') ? TRUST_PROXY_HINT : '', names.includes('TELEMETRY_API_LIMIT') ? BUCKET_LIMIT_HINT : '']
+      .filter(Boolean)
+      .map((text) => `. ${text}`)
+      .join('');
+    throw new ConfigError(`invalid or missing environment variables: ${names.join(', ')}${hints}`);
   }
   const e = parsed.data;
   if (e.NODE_ENV === 'production' && !e.JWT_PRIVATE_KEY_PEM) {
@@ -99,5 +131,6 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     jwtPrivateKeyPem: e.JWT_PRIVATE_KEY_PEM ?? null,
     logLevel: e.LOG_LEVEL,
     trustProxy: e.TRUST_PROXY,
+    telemetryApiLimit: e.TELEMETRY_API_LIMIT,
   };
 }

@@ -41,6 +41,7 @@ export const MEMORY_CONFIG: AppConfig = {
   jwtPrivateKeyPem: null,
   logLevel: 'silent',
   trustProxy: false,
+  telemetryApiLimit: { capacity: 200, refillPerSecond: 150 },
 };
 
 export interface MemoryApp {

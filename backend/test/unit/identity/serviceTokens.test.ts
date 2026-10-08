@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from 'vitest';
 import { buildApp } from '../../../src/app.js';
 import { createMemoryAppDeps } from '../../../src/memoryDeps.js';
 import type { MemoryApp } from '../../../src/memoryDeps.js';
-import { requireService, serviceGuard } from '../../../src/modules/identity/guards.js';
+import { limiterKey, requireService, serviceGuard } from '../../../src/modules/identity/guards.js';
 import { TokenBucketLimiter } from '../../../src/modules/identity/limiter/tokenBucket.js';
 import { GAME_SCOPES } from '../../../src/modules/identity/scopes.js';
 import type { ZodApp } from '../../../src/platform/http.js';
@@ -108,5 +108,21 @@ describe('service guard', () => {
     expect(limited.statusCode).toBe(429);
     expect(limited.json()).toMatchObject({ error: 'rate_limited' });
     expect(Number(limited.headers['retry-after'])).toBeGreaterThan(0);
+  });
+
+  // S4-F5: a bucket group gets its own key, so spending it leaves the default key untouched.
+  test('a non default group spends the clientId:group key and leaves the plain clientId key alone', async () => {
+    expect(limiterKey('game-server')).toBe('game-server');
+    expect(limiterKey('game-server', 'default')).toBe('game-server');
+    expect(limiterKey('game-server', 'telemetry')).toBe('game-server:telemetry');
+
+    const shared = new TokenBucketLimiter({ capacity: 1, refillPerSecond: 0.001, clock: createFakeClock() });
+    app.get('/test/grouped', { onRequest: serviceGuard(memory.deps.serviceTokens, shared, 'game:telemetry', 'telemetry') }, () => ({ ok: true }));
+    const headers = bearer(await gameToken(memory.deps.tokens));
+    const grouped = () => app.inject({ method: 'GET', url: '/test/grouped', headers });
+    expect((await grouped()).statusCode).toBe(200);
+    expect((await grouped()).statusCode).toBe(429);
+    expect(shared.allow('game-server')).toBe(true); // the default key still has its token
+    expect(shared.allow('game-server:telemetry')).toBe(false);
   });
 });
