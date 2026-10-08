@@ -49,6 +49,19 @@ describe('TokenBucketLimiter', () => {
     expect(limiter.size).toBe(3);
   });
 
+  test('retryAfterSeconds refills first, so idle time is counted', () => {
+    const clock = createFakeClock();
+    const limiter = new TokenBucketLimiter({ capacity: 1, refillPerSecond: 0.1, clock });
+    limiter.allow('k');
+    expect(limiter.allow('k')).toBe(false);
+    expect(limiter.retryAfterSeconds('k')).toBe(10);
+    clock.advance(4_000);
+    expect(limiter.retryAfterSeconds('k')).toBe(6);
+    clock.advance(6_000);
+    expect(limiter.retryAfterSeconds('k')).toBe(0);
+    expect(limiter.allow('k')).toBe(true);
+  });
+
   test('bad settings are refused', () => {
     const clock = createFakeClock();
     expect(() => new TokenBucketLimiter({ capacity: 0, refillPerSecond: 1, clock })).toThrow(RangeError);

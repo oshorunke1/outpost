@@ -22,9 +22,15 @@ function bucketKey(...parts: string[]): string {
 }
 
 // Three counters. All of them count attempts (not only failures) and all are checked before the
-// password is verified. perIpAccount is tight: one machine gets 5 guesses per 5 minutes at one
-// operator. perIp stops one machine spraying many accounts. perAccount is the loose ceiling for an
+// password is verified. perIp stops one machine spraying many accounts. perIpAccount is tight: one
+// machine gets 5 guesses per 5 minutes at one operator. perAccount is the loose ceiling for an
 // attacker who rotates IPs.
+//
+// They are checked in that order and the first one that blocks throws straight away, so a later
+// counter never counts an attempt an earlier counter already refused. That matters: if every
+// counter counted every attempt, one attacker IP could keep hammering and burn the shared
+// perAccount budget with requests that were blocked anyway, locking the real operator out from
+// every IP. With short-circuiting, one IP can add at most 5 to perAccount per 5 minutes.
 //
 // This reduces targeted lockout, it does not eliminate it. An attacker with many IPs can still spend
 // the perAccount budget and make a real operator wait. What it buys is that the attacker needs a new
@@ -40,17 +46,18 @@ export function createLoginLimiter(counters: {
   return {
     async check(ip, email) {
       const account = normalizeEmail(email);
-      const results = await Promise.all([
-        counters.perIp.hit(bucketKey(ip)),
-        counters.perIpAccount.hit(bucketKey(ip, account)),
-        counters.perAccount.hit(bucketKey(account)),
-      ]);
-      const blocked = results.filter((result) => !result.allowed);
-      if (blocked.length > 0) {
-        const retryAfter = Math.max(...blocked.map((result) => result.retryAfterSeconds));
-        throw new AppError(429, 'rate_limited', 'Too many attempts, try again later', {
-          headers: { 'retry-after': String(retryAfter) },
-        });
+      const steps: [SlidingWindowCounter, string][] = [
+        [counters.perIp, bucketKey(ip)],
+        [counters.perIpAccount, bucketKey(ip, account)],
+        [counters.perAccount, bucketKey(account)],
+      ];
+      for (const [counter, key] of steps) {
+        const result = await counter.hit(key);
+        if (!result.allowed) {
+          throw new AppError(429, 'rate_limited', 'Too many attempts, try again later', {
+            headers: { 'retry-after': String(result.retryAfterSeconds) },
+          });
+        }
       }
     },
   };

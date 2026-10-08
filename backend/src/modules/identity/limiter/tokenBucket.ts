@@ -54,9 +54,7 @@ export class TokenBucketLimiter {
       bucket = { tokens: this.capacity, updatedAt: now };
       this.buckets.set(key, bucket);
     }
-    const elapsed = Math.max(0, now - bucket.updatedAt);
-    bucket.tokens = Math.min(this.capacity, bucket.tokens + elapsed * this.refillPerMs);
-    bucket.updatedAt = Math.max(bucket.updatedAt, now);
+    this.refill(bucket, now);
     if (bucket.tokens >= 1) {
       bucket.tokens -= 1;
       return true;
@@ -66,8 +64,16 @@ export class TokenBucketLimiter {
 
   retryAfterSeconds(key: string): number {
     const bucket = this.buckets.get(key);
-    if (!bucket || bucket.tokens >= 1) return 0;
+    if (!bucket) return 0;
+    this.refill(bucket, this.clock.now());
+    if (bucket.tokens >= 1) return 0;
     return Math.max(1, Math.ceil((1 - bucket.tokens) / this.refillPerMs / 1000));
+  }
+
+  private refill(bucket: Bucket, now: number): void {
+    const elapsed = Math.max(0, now - bucket.updatedAt);
+    bucket.tokens = Math.min(this.capacity, bucket.tokens + elapsed * this.refillPerMs);
+    bucket.updatedAt = Math.max(bucket.updatedAt, now);
   }
 
   forget(key: string): void {

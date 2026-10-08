@@ -63,6 +63,16 @@ describe('login limiter', () => {
     await expect(limiter.check('10.1.0.200', 'other@x.com')).resolves.toBeUndefined();
   });
 
+  test('blocked attempts from one IP never burn the account budget for other IPs', async () => {
+    const { limiter } = make();
+    for (let i = 0; i < 5; i += 1) await limiter.check('10.0.0.1', 'victim@x.com');
+    for (let i = 0; i < 30; i += 1) expectRateLimited(await caught(limiter.check('10.0.0.1', 'victim@x.com')));
+    // perAccount saw only the 5 real attempts, so 15 more fresh IPs still fit under its limit of 20.
+    await expect(limiter.check('10.0.0.2', 'victim@x.com')).resolves.toBeUndefined();
+    for (let i = 3; i < 17; i += 1) await limiter.check(`10.0.0.${i}`, 'victim@x.com');
+    expectRateLimited(await caught(limiter.check('10.0.0.50', 'victim@x.com')));
+  });
+
   test('one IP spraying many accounts is stopped by the IP limit', async () => {
     const { limiter } = make();
     for (let i = 0; i < 20; i += 1) await limiter.check('10.0.0.1', `account-${i}@x.com`);
