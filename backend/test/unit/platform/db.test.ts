@@ -28,18 +28,97 @@ describe('withTransaction', () => {
   test('retries a deadlock, then succeeds', async () => {
     const { pool, log } = fakePool();
     let calls = 0;
-    const result = await withTransaction(pool, async () => {
-      calls += 1;
-      if (calls === 1) throw deadlock();
-      return 'ok';
-    });
+    const result = await withTransaction(
+      pool,
+      async () => {
+        calls += 1;
+        if (calls === 1) throw deadlock();
+        return 'ok';
+      },
+      { sleep: async () => undefined },
+    );
     expect(result).toBe('ok');
     expect(log).toEqual(['begin', 'rollback', 'release', 'begin', 'commit', 'release']);
   });
 
   test('gives up after the last attempt', async () => {
     const { pool } = fakePool();
-    await expect(withTransaction(pool, async () => Promise.reject(deadlock()), 2)).rejects.toThrow('Deadlock');
+    await expect(withTransaction(pool, async () => Promise.reject(deadlock()), { attempts: 2, sleep: async () => undefined })).rejects.toThrow('Deadlock');
+  });
+
+  test('makes 3 attempts by default and retries a lock wait timeout too', async () => {
+    const { pool } = fakePool();
+    let calls = 0;
+    const lockWait = () => Object.assign(new Error('Lock wait timeout exceeded'), { code: 'ER_LOCK_WAIT_TIMEOUT' });
+    const failure = withTransaction(
+      pool,
+      async () => {
+        calls += 1;
+        throw calls % 2 === 1 ? lockWait() : deadlock();
+      },
+      { sleep: async () => undefined },
+    );
+    await expect(failure).rejects.toThrow('Lock wait timeout');
+    expect(calls).toBe(3);
+  });
+
+  // Full jitter: each wait is random() times an exponentially growing cap, so transactions that
+  // collided once do not wake in lockstep and collide again (S3-F3).
+  test('waits a jittered, growing backoff between attempts and never after the last one', async () => {
+    const { pool } = fakePool();
+    const waits: number[] = [];
+    const draws = [0.5, 0.25, 0.9];
+    const failure = withTransaction(pool, async () => Promise.reject(deadlock()), {
+      attempts: 3,
+      baseDelayMs: 20,
+      random: () => draws.shift() ?? 0,
+      sleep: async (ms) => void waits.push(ms),
+    });
+    await expect(failure).rejects.toThrow('Deadlock');
+    expect(waits).toEqual([10, 10]); // 0.5 * 20, then 0.25 * 40
+  });
+
+  test('caps the backoff and keeps it inside 0..cap whatever random returns', async () => {
+    const { pool } = fakePool();
+    const waits: number[] = [];
+    const draws = [0.999, 7, -3, Number.NaN];
+    const failure = withTransaction(pool, async () => Promise.reject(deadlock()), {
+      attempts: 5,
+      baseDelayMs: 20,
+      maxDelayMs: 50,
+      random: () => draws.shift() ?? 0,
+      sleep: async (ms) => void waits.push(ms),
+    });
+    await expect(failure).rejects.toThrow('Deadlock');
+    expect(waits).toHaveLength(4);
+    expect(waits[0]).toBeCloseTo(19.98);
+    expect(waits.slice(1)).toEqual([40, 0, 0]); // out of range draws are clamped, NaN counts as 0
+  });
+
+  test('never retries a failed commit, whose outcome is unknown', async () => {
+    const { pool, log } = fakePool();
+    const connection = await pool.getConnection();
+    connection.commit = async () => Promise.reject(deadlock());
+    let calls = 0;
+    await expect(
+      withTransaction(
+        pool,
+        async () => {
+          calls += 1;
+          return 'ok';
+        },
+        { sleep: async () => undefined },
+      ),
+    ).rejects.toThrow('Deadlock');
+    expect(calls).toBe(1);
+    expect(log).toEqual(['begin', 'rollback', 'release']);
+  });
+
+  test('does not wait before retrying an error it will not retry', async () => {
+    const { pool } = fakePool();
+    const waits: number[] = [];
+    await expect(withTransaction(pool, async () => Promise.reject(new Error('boom')), { sleep: async (ms) => void waits.push(ms) })).rejects.toThrow('boom');
+    expect(waits).toEqual([]);
   });
 
   test('never retries other errors', async () => {

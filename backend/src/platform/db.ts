@@ -42,22 +42,53 @@ function codeOf(error: unknown): unknown {
   return typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
 }
 
+export interface TransactionOptions {
+  attempts?: number; // total tries, including the first (default 3)
+  baseDelayMs?: number; // backoff cap before the second try; it doubles each retry (default 20)
+  maxDelayMs?: number; // the backoff cap never grows past this (default 200)
+  random?: () => number; // injected for tests, Math.random otherwise
+  sleep?: (ms: number) => Promise<void>; // injected for tests, a real timer otherwise
+}
+
+const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+// Full jitter: a uniform wait between 0 and an exponentially growing cap. Transactions that
+// collided once spread out instead of waking together and colliding again (S3-F3).
+function backoffMs(retry: number, options: TransactionOptions): number {
+  const cap = Math.min(options.maxDelayMs ?? 200, (options.baseDelayMs ?? 20) * 2 ** (retry - 1));
+  const draw = (options.random ?? Math.random)();
+  const unit = Number.isFinite(draw) ? Math.min(1, Math.max(0, draw)) : 0;
+  return unit * cap;
+}
+
 // Runs work inside one transaction. InnoDB can pick this transaction as a deadlock victim even
-// when the code is correct, so those (and lock wait timeouts) are retried from the start.
-export async function withTransaction<T>(db: Db, work: (conn: PoolConnection) => Promise<T>, attempts = 3): Promise<T> {
+// when the code is correct, so a deadlock (1213) or a lock wait timeout (1205) is rolled back and
+// the work runs again from the start after a jittered wait, up to attempts tries in all.
+//
+// Retrying is only safe because every effect of work is inside the rolled-back transaction, so
+// work must touch nothing but conn: no Redis, no HTTP, no outside state it mutates. A failed
+// COMMIT is never retried, since its outcome is unknown. The whole transaction is rolled back on
+// a lock wait timeout too, because InnoDB on its own only rolls back the timed-out statement.
+export async function withTransaction<T>(db: Db, work: (conn: PoolConnection) => Promise<T>, options: TransactionOptions = {}): Promise<T> {
+  const attempts = options.attempts ?? 3;
   for (let attempt = 1; ; attempt += 1) {
     const conn = await db.getConnection();
+    let committing = false;
     try {
       await conn.beginTransaction();
       const result = await work(conn);
+      committing = true;
       await conn.commit();
       return result;
     } catch (error) {
       await conn.rollback().catch(() => undefined);
-      if (attempt >= attempts || !RETRYABLE.has(String(codeOf(error)))) throw error;
+      if (committing || attempt >= attempts || !RETRYABLE.has(String(codeOf(error)))) throw error;
     } finally {
       conn.release();
     }
+    // Only a retryable failure gets here; success returned and everything else threw. The wait
+    // comes after release, so a backing-off transaction never holds a pooled connection.
+    await (options.sleep ?? realSleep)(backoffMs(attempt, options));
   }
 }
 
