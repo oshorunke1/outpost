@@ -190,8 +190,11 @@ describe('telemetry worker on Redis and MySQL', () => {
     const a = worker('a');
     await a.ensureGroup();
     await ctx.redis.xadd(STREAM_KEY, '*', 'e', '{oops');
+    // Schema valid, but year 10000 does not fit a DATETIME bucket_start (I1).
+    await ctx.redis.xadd(STREAM_KEY, '*', 'e', JSON.stringify({ name: 'orb_collected', ts: 253402300800000, value: 1 }));
     await publish(1);
-    await expect(a.runOnce()).resolves.toEqual({ applied: 1, duplicates: 0, malformed: 1 });
+    await expect(a.runOnce()).resolves.toEqual({ applied: 1, duplicates: 0, malformed: 2 });
+    expect(await totals()).toEqual({ count: 1, sum: 5 });
     expect(await a.pending()).toBe(0);
   });
 

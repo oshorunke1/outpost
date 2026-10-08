@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { compareStreamIds, parseEntries, parseReadGroupReply } from '../../../src/modules/telemetry/worker.js';
+import { MAX_STORABLE_TS, compareStreamIds, parseEntries, parseReadGroupReply } from '../../../src/modules/telemetry/worker.js';
 
 const good = JSON.stringify({ name: 'player_join', ts: 1, userId: 5 });
 
@@ -31,6 +31,15 @@ describe('stream reply parsing', () => {
   test('an entry whose dims are off the allow list is malformed too', () => {
     const offList = JSON.stringify({ name: 'purchase_result', ts: 1, dims: { itemId: 'BlueHat' } });
     expect(parseEntries([['6-0', ['e', offList]]])).toEqual([{ id: '6-0', event: null }]);
+  });
+
+  test('a timestamp past what a MySQL DATETIME can store is malformed, so it never wedges a batch', () => {
+    const at = (ts: number) => JSON.stringify({ name: 'orb_collected', ts, value: 1 });
+    expect(MAX_STORABLE_TS).toBe(Date.UTC(10000, 0, 1) - 1);
+    expect(parseEntries([['7-0', ['e', at(Date.UTC(10000, 0, 1))]]])).toEqual([{ id: '7-0', event: null }]);
+    expect(parseEntries([['8-0', ['e', at(MAX_STORABLE_TS)]]])).toEqual([{ id: '8-0', event: { name: 'orb_collected', ts: MAX_STORABLE_TS, value: 1 } }]);
+    // An old redelivery still decodes; the range is static and never follows the worker's clock.
+    expect(parseEntries([['9-0', ['e', at(1)]]])[0]?.event).not.toBeNull();
   });
 
   test('stream ids order by milliseconds and then sequence, as numbers', () => {

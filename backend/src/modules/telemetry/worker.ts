@@ -15,6 +15,12 @@ export const MAX_PRUNE_PASSES = 50;
 // Tries in all (the first plus two reruns) when the processed-id insert hits ER_DUP_ENTRY (S4-F2).
 export const DUP_ATTEMPTS = 3;
 
+// The last millisecond a MySQL DATETIME can hold (9999-12-31 23:59:59.999 UTC). An event past it
+// passes the schema but MySQL refuses its bucket_start, and that refusal would fail every batch
+// it lands in, so decode treats it as malformed. The bound is static, never the worker's clock, so
+// an old redelivery still applies.
+export const MAX_STORABLE_TS = Date.UTC(10000, 0, 1) - 1;
+
 export interface StreamEntry {
   id: string;
   event: TelemetryEvent | null; // null when the payload is missing or invalid
@@ -51,7 +57,7 @@ function decode(payload: unknown): TelemetryEvent | null {
   if (typeof payload !== 'string') return null;
   try {
     const parsed = telemetryEventSchema.safeParse(JSON.parse(payload));
-    return parsed.success ? parsed.data : null;
+    return parsed.success && parsed.data.ts <= MAX_STORABLE_TS ? parsed.data : null;
   } catch {
     return null;
   }
