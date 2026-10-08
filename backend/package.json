@@ -12,7 +12,8 @@
     "lint": "eslint .",
     "test:unit": "vitest run --config vitest.config.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "migrate": "tsx src/cli/migrate.ts"
+    "migrate": "tsx src/cli/migrate.ts",
+    "seed": "tsx src/cli/seed.ts"
   },
   "dependencies": {
     "@fastify/swagger": "9.9.1",
