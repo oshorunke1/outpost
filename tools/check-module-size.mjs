@@ -11,6 +11,8 @@ export const DEFAULT_ROOTS = [
   "game/tests",
   "game/scripts",
   "backend/src",
+  "backend/test",
+  "backend/scripts",
   "mcp/src",
   "evals/runner/src",
   "tools",

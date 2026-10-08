@@ -83,3 +83,21 @@ test("roots that do not exist yet are skipped", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("backend source, tests and scripts are all measured, build output is not", () => {
+  const root = makeRepo({
+    "backend/src/modules/economy/ledger.ts": linesOf(701),
+    "backend/test/unit/big.test.ts": linesOf(701),
+    "backend/scripts/demo.ts": linesOf(701),
+    "backend/node_modules/pkg/index.js": linesOf(900),
+    "backend/dist/server.js": linesOf(900),
+  });
+  try {
+    assert.deepEqual(
+      findOversized({ repoRoot: root }).map((offender) => offender.path),
+      ["backend/scripts/demo.ts", "backend/src/modules/economy/ledger.ts", "backend/test/unit/big.test.ts"],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
