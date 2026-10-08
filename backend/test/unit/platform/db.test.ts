@@ -2,7 +2,7 @@ import { createServer } from 'node:net';
 import type { AddressInfo, Server, Socket } from 'node:net';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import type { Db } from '../../../src/platform/db.js';
-import { createPool, duplicateKeyName, isDuplicateKey, pingDb, withTransaction } from '../../../src/platform/db.js';
+import { CommitOutcomeUnknownError, createPool, duplicateKeyName, isDuplicateKey, pingDb, withTransaction } from '../../../src/platform/db.js';
 import { connectRedis } from '../../../src/platform/redis.js';
 
 function fakePool(): { pool: Db; log: string[] } {
@@ -12,6 +12,7 @@ function fakePool(): { pool: Db; log: string[] } {
     commit: async () => void log.push('commit'),
     rollback: async () => void log.push('rollback'),
     release: () => void log.push('release'),
+    destroy: () => void log.push('destroy'),
   };
   return { pool: { getConnection: async () => connection } as unknown as Db, log };
 }
@@ -95,23 +96,91 @@ describe('withTransaction', () => {
     expect(waits.slice(1)).toEqual([40, 0, 0]); // out of range draws are clamped, NaN counts as 0
   });
 
-  test('never retries a failed commit, whose outcome is unknown', async () => {
+  test('never retries a failed commit and reports it as CommitOutcomeUnknownError with the cause, logged', async () => {
     const { pool, log } = fakePool();
     const connection = await pool.getConnection();
-    connection.commit = async () => Promise.reject(deadlock());
+    const commitFailure = deadlock();
+    connection.commit = async () => Promise.reject(commitFailure);
+    const logged: { details: object; message: string }[] = [];
     let calls = 0;
-    await expect(
-      withTransaction(
-        pool,
-        async () => {
-          calls += 1;
-          return 'ok';
-        },
-        { sleep: async () => undefined },
-      ),
-    ).rejects.toThrow('Deadlock');
+    const failure = await withTransaction(
+      pool,
+      async () => {
+        calls += 1;
+        return 'ok';
+      },
+      { sleep: async () => undefined, logger: { error: (details, message) => void logged.push({ details, message }) } },
+    ).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(CommitOutcomeUnknownError);
+    expect((failure as CommitOutcomeUnknownError).cause).toBe(commitFailure);
+    expect((failure as Error).name).toBe('CommitOutcomeUnknownError');
     expect(calls).toBe(1);
     expect(log).toEqual(['begin', 'rollback', 'release']);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]?.message).toMatch(/commit/i);
+    expect(logged[0]?.details).toMatchObject({ code: 'ER_LOCK_DEADLOCK' });
+  });
+
+  test('a failed rollback destroys the connection instead of returning it to the pool', async () => {
+    const { pool, log } = fakePool();
+    const connection = await pool.getConnection();
+    connection.rollback = async () => {
+      log.push('rollback');
+      throw new Error('connection lost');
+    };
+    const logged: string[] = [];
+    await expect(
+      withTransaction(pool, async () => Promise.reject(new Error('boom')), { logger: { error: (_details, message) => void logged.push(message) } }),
+    ).rejects.toThrow('boom'); // the original error wins over the rollback error
+    expect(log).toEqual(['begin', 'rollback', 'destroy']);
+    expect(logged).toHaveLength(1);
+  });
+
+  test('a failed rollback on a retryable error still retries, on a fresh connection', async () => {
+    const { pool, log } = fakePool();
+    const connection = await pool.getConnection();
+    let rollbacks = 0;
+    connection.rollback = async () => {
+      rollbacks += 1;
+      log.push('rollback');
+      if (rollbacks === 1) throw new Error('connection lost');
+    };
+    let calls = 0;
+    const result = await withTransaction(
+      pool,
+      async () => {
+        calls += 1;
+        if (calls === 1) throw deadlock();
+        return 'ok';
+      },
+      { sleep: async () => undefined },
+    );
+    expect(result).toBe('ok');
+    expect(log).toEqual(['begin', 'rollback', 'destroy', 'begin', 'commit', 'release']);
+  });
+
+  test.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53])('refuses attempts = %s before touching the pool', async (attempts) => {
+    const { pool, log } = fakePool();
+    await expect(withTransaction(pool, async () => 'ok', { attempts })).rejects.toThrow(RangeError);
+    expect(log).toEqual([]);
+  });
+
+  test('attempts = 1 means one try and no retry', async () => {
+    const { pool } = fakePool();
+    let calls = 0;
+    const failure = withTransaction(
+      pool,
+      async () => {
+        calls += 1;
+        throw deadlock();
+      },
+      { attempts: 1, sleep: async () => undefined },
+    );
+    await expect(failure).rejects.toThrow('Deadlock');
+    expect(calls).toBe(1);
   });
 
   test('does not wait before retrying an error it will not retry', async () => {
