@@ -51,6 +51,12 @@ export function summarizeCause(cause: unknown, depth = 0): CauseSummary | undefi
   return summary;
 }
 
+const STABLE_4XX_CODES: Record<number, string> = {
+  404: 'not_found',
+  413: 'payload_too_large',
+  415: 'unsupported_media_type',
+};
+
 export function registerErrorHandler(app: ZodApp): void {
   app.setErrorHandler((caught: unknown, request, reply) => {
     const error = caught as FrameworkError;
@@ -64,10 +70,11 @@ export function registerErrorHandler(app: ZodApp): void {
     const status =
       typeof error.statusCode === 'number' && error.statusCode >= 400 && error.statusCode < 500 ? error.statusCode : 500;
     if (status === 500) {
-      request.log.error({ error: summarizeCause(caught) }, 'unhandled error');
+      request.log.error({ err: summarizeCause(caught) }, 'unhandled error');
       return reply.code(500).send({ error: 'internal', message: 'Internal error' });
     }
-    return reply.code(status).send({ error: (error.code ?? 'bad_request').toLowerCase(), message: error.message });
+    // Framework codes (FST_ERR_...) are internals, so clients get a small fixed set instead.
+    return reply.code(status).send({ error: STABLE_4XX_CODES[status] ?? 'bad_request', message: error.message });
   });
 
   app.setNotFoundHandler((_request, reply) => reply.code(404).send({ error: 'not_found', message: 'Route not found' }));

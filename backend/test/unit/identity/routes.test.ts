@@ -168,10 +168,19 @@ describe('input validation', () => {
     expectError(response, 400, 'invalid_request');
   });
 
-  test('a body over the size limit is refused with 413', async () => {
+  test('a body over the size limit is refused with 413 payload_too_large', async () => {
     const response = await post('/auth/login', { email: EMAIL, password: 'x'.repeat(20 * 1024) });
-    expect(response.statusCode).toBe(413);
-    expect(response.json<{ error: string }>().error).toBe('fst_err_ctp_body_too_large');
+    expectError(response, 413, 'payload_too_large');
+  });
+
+  test('a body that is not JSON is refused with 415 unsupported_media_type', async () => {
+    const response = await app.inject({ method: 'POST', url: '/auth/login', headers: { 'content-type': 'application/xml' }, payload: '<login/>' });
+    expectError(response, 415, 'unsupported_media_type');
+  });
+
+  test('any other framework 4xx is bad_request, never a framework code', async () => {
+    const response = await app.inject({ method: 'POST', url: '/auth/login', headers: { 'content-type': 'application/json' }, payload: '{"email":' });
+    expectError(response, 400, 'bad_request');
   });
 });
 
@@ -183,16 +192,38 @@ describe('the operator guard', () => {
     ['an empty token', () => 'Bearer '],
     ['a scheme alone', () => 'Bearer'],
     ['a second token', (t: string) => `Bearer ${t} ${t}`],
-  ])('%s is 401 unauthorized', async (_name, header) => {
+  ])('%s is 401 unauthorized with WWW-Authenticate: Bearer', async (_name, header) => {
     const token = await accessToken();
     const response = await app.inject({ method: 'GET', url: '/auth/sessions', headers: { authorization: header(token) } });
     expectError(response, 401, 'unauthorized');
+    expect(response.headers['www-authenticate']).toBe('Bearer');
+  });
+
+  test('a missing header is 401 unauthorized with WWW-Authenticate: Bearer', async () => {
+    const response = await app.inject({ method: 'POST', url: '/auth/logout' });
+    expectError(response, 401, 'unauthorized');
+    expect(response.headers['www-authenticate']).toBe('Bearer');
+  });
+
+  test('a stale token that parses is 401 unauthorized with WWW-Authenticate: Bearer', async () => {
+    const token = await accessToken();
+    await app.inject({ method: 'POST', url: '/auth/logout', headers: { authorization: `Bearer ${token}` } });
+    const response = await app.inject({ method: 'GET', url: '/auth/sessions', headers: { authorization: `Bearer ${token}` } });
+    expectError(response, 401, 'unauthorized');
+    expect(response.headers['www-authenticate']).toBe('Bearer');
   });
 
   test('a service token is 401 unauthorized on an operator route', async () => {
     const service = await memory.deps.tokens.signServiceToken({ clientId: 'game', scopes: ['game:economy'] });
     const response = await app.inject({ method: 'GET', url: '/auth/sessions', headers: { authorization: `Bearer ${service}` } });
     expectError(response, 401, 'unauthorized');
+    expect(response.headers['www-authenticate']).toBe('Bearer');
+  });
+
+  test('a wrong password on login is not a bearer challenge', async () => {
+    const response = await login('nope');
+    expectError(response, 401, 'invalid_credentials');
+    expect(response.headers['www-authenticate']).toBeUndefined();
   });
 });
 
@@ -261,7 +292,7 @@ describe('rate limits and failing closed', () => {
       cause: Object.assign(new Error('socket closed'), { body: { password: PASSWORD } }),
     });
     const broken: WindowStore = { increment: () => Promise.reject(leakyError) };
-    await start({ config: { logLevel: 'info' }, windowStore: () => broken });
+    memory = await createMemoryAppDeps({ clock, windowStore: () => broken });
     const loud = await buildApp({ ...memory.deps, config: { ...MEMORY_CONFIG, logLevel: 'info' } }, { logStream: sink });
     const response = await loud.inject({ method: 'POST', url: '/auth/login', payload: { email: EMAIL, password: PASSWORD } });
     expect(response.statusCode).toBe(503);
@@ -312,12 +343,5 @@ describe('trust proxy', () => {
     await start({ config: { trustProxy: ['10.0.0.0/8'] } });
     const statuses = await spoofedAttempts('203.0.113.9');
     expect(statuses.slice(5)).toEqual(Array<string>(5).fill('429 rate_limited'));
-  });
-
-  test('a hop count trusts exactly that many hops', async () => {
-    await start({ config: { trustProxy: 1 } });
-    const response = await login(PASSWORD, { remoteAddress: '10.1.1.1', headers: { 'x-forwarded-for': '198.51.100.5, 198.51.100.6' } });
-    const sessions = await app.inject({ method: 'GET', url: '/auth/sessions', headers: { authorization: `Bearer ${response.json<{ accessToken: string }>().accessToken}` } });
-    expect(sessions.json<{ sessions: { ip: string }[] }>().sessions[0]?.ip).toBe('198.51.100.6');
   });
 });

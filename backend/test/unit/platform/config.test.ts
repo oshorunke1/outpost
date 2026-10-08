@@ -64,11 +64,6 @@ describe('loadConfig', () => {
     expect(loadConfig({ ...base, TRUST_PROXY: '' }).trustProxy).toBe(false);
   });
 
-  test('TRUST_PROXY takes a hop count', () => {
-    expect(loadConfig({ ...base, TRUST_PROXY: '1' }).trustProxy).toBe(1);
-    expect(loadConfig({ ...base, TRUST_PROXY: '3' }).trustProxy).toBe(3);
-  });
-
   test('TRUST_PROXY takes a comma separated list of addresses and CIDR ranges', () => {
     expect(loadConfig({ ...base, TRUST_PROXY: '10.0.0.0/8, 192.168.1.7 ,::1,fd00::/8' }).trustProxy).toEqual([
       '10.0.0.0/8',
@@ -78,20 +73,23 @@ describe('loadConfig', () => {
     ]);
   });
 
-  test.each([
-    ['true'], // trusting every hop would let any client pick its own IP
-    ['yes'],
-    ['0'],
-    ['-1'],
-    ['1.5'],
-    ['33'],
-    ['10.0.0.0/33'],
-    ['::1/129'],
-    ['10.0.0.0/8,'],
-    ['300.1.1.1'],
-    ['10.0.0.0/8,not-an-ip'],
-  ])('TRUST_PROXY refuses %j and names the variable', (value) => {
-    expect(messageOf({ ...base, TRUST_PROXY: value })).toContain('TRUST_PROXY');
+  // Hop counts are refused on purpose: a client that reaches the app port directly could send enough
+  // X-Forwarded-For entries to pick its own IP. Fastify 5 treats a number as trust nothing for the
+  // same reason. The fix is to name the proxy's address or range.
+  test.each([['1'], ['2'], ['true'], ['yes'], ['10.0.0.0/33'], ['::1/129'], ['10.0.0.0/8,'], ['300.1.1.1'], ['10.0.0.0/8,not-an-ip']])(
+    'TRUST_PROXY refuses %j and says to set the proxy CIDR',
+    (value) => {
+      const message = messageOf({ ...base, TRUST_PROXY: value });
+      expect(message).toContain('TRUST_PROXY');
+      expect(message).toContain('CIDR');
+      expect(message).not.toContain(`TRUST_PROXY=${value}`);
+    },
+  );
+
+  test('a TRUST_PROXY problem is reported alongside other bad variables', () => {
+    const message = messageOf({ ...base, PORT: '0', TRUST_PROXY: '1' });
+    expect(message).toContain('PORT');
+    expect(message).toContain('TRUST_PROXY');
   });
 
   test('production refuses to start without a signing key', () => {

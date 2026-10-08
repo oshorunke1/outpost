@@ -3,10 +3,13 @@ import { z } from 'zod';
 
 export type LogLevel = 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
 
-// false trusts no proxy, so request.ip is the socket peer and X-Forwarded-For is ignored. A number
-// trusts that many hops in front of the app. A list trusts only proxies at those addresses or ranges.
-// Trusting every hop (Fastify's true) is never allowed, since any client could then pick its own IP.
-export type TrustProxy = false | number | string[];
+// false (the default) trusts no proxy: request.ip is the socket peer and X-Forwarded-For is ignored.
+// A list trusts X-Forwarded-For only when the socket peer is one of those proxy addresses or ranges.
+// Hop counts and true are refused on purpose. With either one, a client that reaches the app port
+// directly (not through the proxy) can send its own X-Forwarded-For, pick any IP it likes and get a
+// fresh rate limit bucket on every request. Fastify 5 treats a number as "trust nothing" for the same
+// reason. Behind a load balancer, set TRUST_PROXY to the load balancer's CIDR.
+export type TrustProxy = false | string[];
 
 export interface AppConfig {
   nodeEnv: 'development' | 'test' | 'production';
@@ -29,7 +32,8 @@ export class ConfigError extends Error {
 }
 
 const port = z.coerce.number().int().min(1).max(65535);
-const MAX_PROXY_HOPS = 10;
+const TRUST_PROXY_HINT =
+  "TRUST_PROXY must be false or a comma separated list of the proxy's IPs or CIDR ranges (hop counts and true are refused, set the proxy CIDR instead)";
 
 function isAddressOrCidr(entry: string): boolean {
   const [address = '', prefix, extra] = entry.split('/');
@@ -43,10 +47,6 @@ function isAddressOrCidr(entry: string): boolean {
 function parseTrustProxy(raw: string): TrustProxy | null {
   const value = raw.trim();
   if (value === '' || value === 'false') return false;
-  if (/^\d+$/.test(value)) {
-    const hops = Number(value);
-    return hops >= 1 && hops <= MAX_PROXY_HOPS ? hops : null;
-  }
   const entries = value.split(',').map((entry) => entry.trim());
   return entries.every(isAddressOrCidr) ? entries : null;
 }
@@ -67,7 +67,7 @@ const envSchema = z.object({
     .transform((raw, context) => {
       const parsed = parseTrustProxy(raw);
       if (parsed === null) {
-        context.addIssue({ code: 'custom', message: 'expected false, a hop count from 1 to 10, or a list of IPs and CIDR ranges' });
+        context.addIssue({ code: 'custom', message: TRUST_PROXY_HINT });
         return z.NEVER;
       }
       return parsed;
@@ -80,7 +80,9 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
   const parsed = envSchema.safeParse(env);
   if (!parsed.success) {
     const names = [...new Set(parsed.error.issues.map((issue) => String(issue.path[0])))].sort();
-    throw new ConfigError(`invalid or missing environment variables: ${names.join(', ')}`);
+    // The hint is a fixed sentence, so it never echoes the value that was set.
+    const hint = names.includes('TRUST_PROXY') ? `. ${TRUST_PROXY_HINT}` : '';
+    throw new ConfigError(`invalid or missing environment variables: ${names.join(', ')}${hint}`);
   }
   const e = parsed.data;
   if (e.NODE_ENV === 'production' && !e.JWT_PRIVATE_KEY_PEM) {
