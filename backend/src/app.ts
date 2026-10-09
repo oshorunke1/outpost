@@ -27,6 +27,7 @@ import type { ZodApp } from './platform/http.js';
 import { loggerOptions } from './platform/logger.js';
 import { registerHttpMetrics } from './platform/metrics.js';
 import { registerOpenApi } from './platform/openapi.js';
+import { registerRouteTracing } from './platform/tracing.js';
 import type { Metrics } from './platform/metrics.js';
 
 // Everything the routes need. compose.ts fills it with MySQL and Redis, memoryDeps.ts with fakes.
@@ -67,6 +68,7 @@ export async function buildApp(deps: AppDeps, options: BuildOptions = {}): Promi
   app.decorateRequest('principal', null);
   registerErrorHandler(app);
   registerHttpMetrics(app, deps.metrics);
+  registerRouteTracing(app);
   await registerOpenApi(app); // before any route, so it sees them all
 
   // One bucket per group. Telemetry's is per instance like apiLimiter, sized from TELEMETRY_API_LIMIT.
