@@ -62,6 +62,40 @@ Describe("EarnBatcher setup", function()
 		Make({ MaxAgeSeconds = 0.5 })
 	end)
 
+	It("refuses a MaxRetries that is not a whole number of at least 1", function()
+		for _, Bad in { 0, -1, 1.5, NaN, math.huge } do
+			Expect(function()
+				EarnBatcher.new({
+					BootTag = Tag,
+					MaxCoins = 200,
+					MaxAgeSeconds = 30,
+					Keys = Requests,
+					Retry = RetryPolicy,
+					RandomUnit = math.random,
+					MaxRetries = Bad,
+				})
+			end).ToThrow("MaxRetries")
+		end
+	end)
+
+	It("refuses a retry Policy that could never give up or never wait", function()
+		local Bads: { EarnBatcher.Policy } = {
+			{ MaxAttempts = NaN, BaseDelay = 5, MaxDelay = 120 },
+			{ MaxAttempts = math.huge, BaseDelay = 5, MaxDelay = 120 },
+			{ MaxAttempts = 0, BaseDelay = 5, MaxDelay = 120 },
+			{ MaxAttempts = 2.5, BaseDelay = 5, MaxDelay = 120 },
+			{ MaxAttempts = 6, BaseDelay = 0, MaxDelay = 120 },
+			{ MaxAttempts = 6, BaseDelay = NaN, MaxDelay = 120 },
+			{ MaxAttempts = 6, BaseDelay = 5, MaxDelay = math.huge },
+			{ MaxAttempts = 6, BaseDelay = 5, MaxDelay = -1 },
+		}
+		for _, Bad in Bads do
+			Expect(function()
+				Make({ Policy = Bad })
+			end).ToThrow("Policy")
+		end
+	end)
+
 	It("refuses a boot tag the backend's key rule would refuse", function()
 		Expect(function()
 			EarnBatcher.new({
@@ -166,20 +200,41 @@ Describe("EarnBatcher batching", function()
 		Expect(Flush.Attempts).ToBe(0)
 	end)
 
-	It("ignores Coins that are not a positive whole number", function()
+	It("refuses Coins that are not a positive whole number up to 100000, and counts them", function()
 		local Batcher = Make()
-		for _, Bad in { NaN, -5, 0, 2.5, math.huge, -math.huge, "5" :: any } do
+		for _, Bad in { NaN, -5, 0, 2.5, math.huge, -math.huge, "5" :: any, 100001 } do
 			Expect(#Batcher:Add(1001, Bad, 0)).ToBe(0)
 		end
 		Expect(Batcher:PendingCoins(1001)).ToBe(0)
+		-- Only amounts that are real positive numbers add to the Coins count.
+		Expect({ Batcher:TakeRejected() }).ToEqual({ 8, 100003.5 })
+		Expect({ Batcher:TakeRejected() }).ToEqual({ 0, 0 })
 	end)
 
-	It("ignores a UserId the backend would refuse", function()
+	It("an add right at the 100000 ceiling is kept and split", function()
+		local Batcher = Make({ MaxCoins = 1000 })
+		Expect(#Batcher:Add(1001, 100000, 0)).ToBe(100)
+		Expect({ Batcher:TakeRejected() }).ToEqual({ 0, 0 })
+	end)
+
+	It("refuses a UserId the backend would refuse, and counts it", function()
 		local Batcher = Make()
 		for _, Bad in { 0, -1, 1.5, NaN, math.huge, 2 ^ 53, "1001" :: any } do
 			Expect(#Batcher:Add(Bad, 5, 0)).ToBe(0)
 		end
 		Expect(#Batcher:TakeAll()).ToBe(0)
+		Expect({ Batcher:TakeRejected() }).ToEqual({ 7, 35 })
+	end)
+
+	It("refuses an add with a clock that is not a finite number, so no batch is stuck forever", function()
+		local Batcher = Make()
+		for _, Bad in { NaN, math.huge, -math.huge, "0" :: any } do
+			Expect(#Batcher:Add(1001, 5, Bad)).ToBe(0)
+		end
+		Expect(Batcher:PendingCoins(1001)).ToBe(0)
+		Expect({ Batcher:TakeRejected() }).ToEqual({ 4, 20 })
+		Batcher:Add(1001, 5, 0)
+		Expect(#Batcher:TakeDue(30)).ToBe(1)
 	end)
 
 	It("every key passes the backend rule and two boots never share one", function()
@@ -286,25 +341,71 @@ Describe("EarnBatcher retries", function()
 		Expect(#Batcher:TakeDue(35)).ToBe(1)
 	end)
 
-	It("definite answers are never requeued", function()
+	It("a 2xx answer is Accepted and counts as nothing lost", function()
 		local Batcher = Make()
-		for _, Status in { 400, 401, 403, 404, 409, 422, 200, 201 } do
+		for _, Status in { 200, 201, 204 } do
 			Batcher:Add(1001, 5, 0)
+			local Outcome, Evicted = Batcher:Requeue(Batcher:TakeFor(1001) :: Flush, Status, 0)
+			Expect(Outcome).ToBe("Accepted")
+			Expect(Evicted).ToBeNil()
+		end
+		Expect(Batcher:RetryCount()).ToBe(0)
+		Expect({ Batcher:TakeRefused() }).ToEqual({ 0, 0 })
+		Expect({ Batcher:TakeDropped() }).ToEqual({ 0, 0 })
+	end)
+
+	It("a definite refusal is never requeued and is counted with its Coins", function()
+		local Batcher = Make()
+		for Index, Status in { 400, 404, 409, 422, 418 } do
+			Batcher:Add(1001, Index, 0)
 			local Flush = Batcher:TakeFor(1001) :: Flush
 			local Outcome, Evicted = Batcher:Requeue(Flush, Status, 0)
-			Expect(Outcome).ToBe("Final")
+			Expect(Outcome).ToBe("Refused")
 			Expect(Evicted).ToBeNil()
 			Expect(Flush.Attempts).ToBe(0)
 		end
 		Expect(Batcher:RetryCount()).ToBe(0)
+		Expect({ Batcher:TakeRefused() }).ToEqual({ 5, 15 })
+		Expect({ Batcher:TakeRefused() }).ToEqual({ 0, 0 })
 		Expect({ Batcher:TakeDropped() }).ToEqual({ 0, 0 })
 	end)
 
+	It("401 and 403 are about this server's credential, so the batch is tried again", function()
+		local Batcher = Make()
+		for _, Status in { 401, 403 } do
+			Batcher:Add(1001, 5, 0)
+			Expect((Batcher:Requeue(Batcher:TakeFor(1001) :: Flush, Status, 0))).ToBe("Queued")
+		end
+		Expect(Batcher:RetryCount()).ToBe(2)
+		Expect({ Batcher:TakeRefused() }).ToEqual({ 0, 0 })
+	end)
+
+	It("a 403 that never goes away still ends in GaveUp and is counted", function()
+		local Batcher = Make()
+		Batcher:Add(1001, 9, 0)
+		local Flush = Batcher:TakeFor(1001) :: Flush
+		for _ = 1, 5 do
+			Batcher:Requeue(Flush, 403, 0)
+			Flush = Batcher:TakeDue(math.huge)[1]
+		end
+		Expect((Batcher:Requeue(Flush, 403, 0))).ToBe("GaveUp")
+		Expect({ Batcher:TakeDropped() }).ToEqual({ 1, 9 })
+	end)
+
+	It("a requeue with a clock that is not a finite number is due at once instead of never", function()
+		local Batcher = Make()
+		for _, Bad in { NaN, math.huge } do
+			Batcher:Add(1001, 5, 0)
+			Expect((Batcher:Requeue(Batcher:TakeFor(1001) :: Flush, 503, Bad))).ToBe("Queued")
+		end
+		Expect(#Batcher:TakeDue(0)).ToBe(2)
+	end)
+
 	It("only temporary failures are worth sending again", function()
-		for _, Status in { 0, -1, -2, -3, 408, 425, 429, 500, 502, 503, 504 } do
+		for _, Status in { 0, -1, -2, -3, 401, 403, 408, 425, 429, 500, 502, 503, 504 } do
 			Expect(EarnBatcher.ShouldRequeue(Status)).ToBe(true)
 		end
-		for _, Status in { 200, 201, 204, 400, 401, 403, 404, 409, 422, NaN } do
+		for _, Status in { 200, 201, 204, 400, 404, 409, 418, 422, NaN } do
 			Expect(EarnBatcher.ShouldRequeue(Status)).ToBe(false)
 		end
 	end)

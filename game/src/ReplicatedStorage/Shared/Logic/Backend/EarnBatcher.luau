@@ -8,6 +8,8 @@
 -- the same batch twice can never pay twice. The keys come from Requests, passed in as Keys.
 -- A batch that failed for a temporary reason goes back in with the same key and waits a growing,
 -- jittered time before it is tried again. After too many tries it is dropped and counted.
+-- Coins never leave quietly. A refused add, a batch the backend refused and a batch we gave up on
+-- are each counted, so the caller can warn about them.
 
 export type Flush = {
 	UserId: number,
@@ -34,9 +36,10 @@ export type Config = {
 	MaxRetries: number?,
 }
 
--- Queued means it will be tried again. Final means the backend gave a definite answer, so it must
--- not be sent again. GaveUp means it failed too many times and was dropped.
-export type Outcome = "Queued" | "Final" | "GaveUp"
+-- Accepted means the backend took it. Queued means it will be tried again. Refused means the backend
+-- gave a definite no, so it must not be sent again, and it is counted. GaveUp means it failed too
+-- many times and was dropped, and it is counted too.
+export type Outcome = "Accepted" | "Queued" | "Refused" | "GaveUp"
 
 type Pending = { Coins: number, Since: number }
 type Fields = {
@@ -53,6 +56,10 @@ type Fields = {
 	Retries: { Flush },
 	DroppedBatches: number,
 	DroppedCoins: number,
+	RefusedBatches: number,
+	RefusedCoins: number,
+	RejectedAdds: number,
+	RejectedCoins: number,
 }
 
 local EarnBatcher = {}
@@ -69,11 +76,30 @@ EarnBatcher.RequeuePolicy = table.freeze({ MaxAttempts = 6, BaseDelay = 5, MaxDe
 -- The biggest whole number a JSON number holds exactly, and the backend's top UserId.
 local MaxSafeInteger = 9007199254740991
 
--- One add bigger than this is surely a bug, so it is ignored instead of making a pile of batches.
+-- One add bigger than this is surely a bug, so it is refused and counted instead of making a pile of batches.
 local MaxCoinsPerAdd = 100000
 
 local function IsWhole(Value: any, Low: number, High: number): boolean
 	return type(Value) == "number" and Value == Value and Value % 1 == 0 and Value >= Low and Value <= High
+end
+
+local function IsFinite(Value: any): boolean
+	return type(Value) == "number" and Value == Value and Value ~= math.huge and Value ~= -math.huge
+end
+
+local function IsFinitePositive(Value: any): boolean
+	return IsFinite(Value) and Value > 0
+end
+
+-- A policy that could never give up, or never wait, is a setup mistake, so it fails at once.
+local function CheckPolicy(Policy: Policy)
+	local Ok = IsWhole(Policy.MaxAttempts, 1, MaxSafeInteger)
+		and IsFinitePositive(Policy.BaseDelay)
+		and IsFinitePositive(Policy.MaxDelay)
+	if not Ok then
+		local Got = `{Policy.MaxAttempts}, {Policy.BaseDelay} and {Policy.MaxDelay}`
+		error(`the retry Policy needs a whole MaxAttempts and BaseDelay and MaxDelay above 0, got {Got}`, 3)
+	end
 end
 
 function EarnBatcher.new(Config: Config): EarnBatcher
@@ -81,9 +107,15 @@ function EarnBatcher.new(Config: Config): EarnBatcher
 		error(`MaxCoins must be a whole number from 1 to 1000, got {Config.MaxCoins}`, 2)
 	end
 	local MaxAge = Config.MaxAgeSeconds
-	if type(MaxAge) ~= "number" or MaxAge ~= MaxAge or MaxAge <= 0 or MaxAge == math.huge then
+	if not IsFinitePositive(MaxAge) then
 		error(`MaxAgeSeconds must be a finite number above 0, got {MaxAge}`, 2)
 	end
+	local MaxRetries = if Config.MaxRetries == nil then 500 else Config.MaxRetries
+	if not IsWhole(MaxRetries, 1, MaxSafeInteger) then
+		error(`MaxRetries must be a whole number of at least 1, got {MaxRetries}`, 2)
+	end
+	local Policy = Config.Policy or EarnBatcher.RequeuePolicy
+	CheckPolicy(Policy)
 	-- Building one key now means a bad boot tag fails here, not on the first orb.
 	Config.Keys.IdempotencyKey(Config.BootTag, "1", 1)
 	local Object: Fields = {
@@ -92,14 +124,18 @@ function EarnBatcher.new(Config: Config): EarnBatcher
 		MaxAgeSeconds = MaxAge,
 		Keys = Config.Keys,
 		Retry = Config.Retry,
-		Policy = Config.Policy or EarnBatcher.RequeuePolicy,
+		Policy = Policy,
 		RandomUnit = Config.RandomUnit,
-		MaxRetries = Config.MaxRetries or 500,
+		MaxRetries = MaxRetries,
 		Pending = {},
 		Sequence = {},
 		Retries = {},
 		DroppedBatches = 0,
 		DroppedCoins = 0,
+		RefusedBatches = 0,
+		RefusedCoins = 0,
+		RejectedAdds = 0,
+		RejectedCoins = 0,
 	}
 	return setmetatable(Object, EarnBatcher)
 end
@@ -121,10 +157,17 @@ local function Take(self: EarnBatcher, UserId: number): Flush?
 end
 
 -- Adds Coins for a player and gives back every batch that is now ready, often none.
--- Anything that is not a whole number of Coins above 0, or not a real UserId, is ignored.
+-- An add is refused, and counted for TakeRejected, when the Coins are not a whole number from 1 to
+-- 100000, the UserId is not a real one, or Now is not a finite number. A batch started with a
+-- broken clock would never age out, so it is better to refuse it here where it gets counted.
 function EarnBatcher.Add(self: EarnBatcher, UserId: number, Coins: number, Now: number): { Flush }
 	local Ready: { Flush } = {}
-	if not IsWhole(UserId, 1, MaxSafeInteger) or not IsWhole(Coins, 1, MaxCoinsPerAdd) then
+	local Good = IsWhole(UserId, 1, MaxSafeInteger) and IsWhole(Coins, 1, MaxCoinsPerAdd) and IsFinite(Now)
+	if not Good then
+		self.RejectedAdds += 1
+		if IsFinitePositive(Coins) then
+			self.RejectedCoins += Coins
+		end
 		return Ready
 	end
 	local Entry: Pending? = self.Pending[UserId]
@@ -199,10 +242,12 @@ local function CountDropped(self: EarnBatcher, Flush: Flush)
 	self.DroppedCoins += Flush.Coins
 end
 
--- Call this with the Status a send got back. A temporary failure puts the batch back with its
--- original key and a NextAttemptAt, after a jittered wait that grows each time and honours the
--- server's RetryAfter seconds when it sent one. A full retry list drops its oldest batch to make
--- room and gives it back as the second result, so the caller can log it.
+-- Call this with the Status every send got back, success included. A 2xx is Accepted. A temporary
+-- failure puts the batch back with its original key and a NextAttemptAt, after a jittered wait that
+-- grows each time and honours the server's RetryAfter seconds when it sent one. Any other answer is
+-- Refused and counted. A full retry list drops its oldest batch to make room and gives it back as
+-- the second result, so the caller can log it. A Now that is not a finite number makes the batch
+-- due at once, because a broken clock must never park it forever.
 function EarnBatcher.Requeue(
 	self: EarnBatcher,
 	Flush: Flush,
@@ -210,8 +255,13 @@ function EarnBatcher.Requeue(
 	Now: number,
 	RetryAfter: number?
 ): (Outcome, Flush?)
+	if type(Status) == "number" and Status >= 200 and Status < 300 then
+		return "Accepted", nil
+	end
 	if not EarnBatcher.ShouldRequeue(Status) then
-		return "Final", nil
+		self.RefusedBatches += 1
+		self.RefusedCoins += Flush.Coins
+		return "Refused", nil
 	end
 	local Attempts = Flush.Attempts + 1
 	if Attempts >= self.Policy.MaxAttempts then
@@ -221,7 +271,7 @@ function EarnBatcher.Requeue(
 	local Wait = self.Retry.DelayFor(self.Policy, Attempts, self.RandomUnit(), RetryAfter)
 	local Again = table.clone(Flush)
 	Again.Attempts = Attempts
-	Again.NextAttemptAt = Now + math.max(Wait, self.Policy.BaseDelay)
+	Again.NextAttemptAt = if IsFinite(Now) then Now + math.max(Wait, self.Policy.BaseDelay) else 0
 	local Evicted: Flush? = nil
 	if #self.Retries >= self.MaxRetries then
 		Evicted = table.remove(self.Retries, 1)
@@ -248,11 +298,35 @@ function EarnBatcher.TakeDropped(self: EarnBatcher): (number, number)
 	return Batches, Coins
 end
 
+-- How many batches the backend refused, and how many Coins in them, since the last call.
+function EarnBatcher.TakeRefused(self: EarnBatcher): (number, number)
+	local Batches, Coins = self.RefusedBatches, self.RefusedCoins
+	self.RefusedBatches = 0
+	self.RefusedCoins = 0
+	return Batches, Coins
+end
+
+-- How many adds were refused, and how many Coins they tried to add, since the last call.
+-- Only amounts that are real positive numbers go into the Coins count.
+function EarnBatcher.TakeRejected(self: EarnBatcher): (number, number)
+	local Adds, Coins = self.RejectedAdds, self.RejectedCoins
+	self.RejectedAdds = 0
+	self.RejectedCoins = 0
+	return Adds, Coins
+end
+
 -- No answer, a refusal made on this server (an open breaker, the budget, or RetryLater), a
--- timeout, a throttle or a server error are all temporary. A definite answer is final, and that
--- includes 400, 404, 409 and 422, so a batch the backend refused is never sent again.
+-- timeout, a throttle or a server error are all temporary. So are 401 and 403, because they are
+-- about this server's credential and not the batch, and the attempt cap still ends them.
+-- Any other answer, such as 400, 404, 409 or 422, is final and never sent again.
 function EarnBatcher.ShouldRequeue(Status: number): boolean
-	return Status <= 0 or Status == 408 or Status == 425 or Status == 429 or Status >= 500
+	return Status <= 0
+		or Status == 401
+		or Status == 403
+		or Status == 408
+		or Status == 425
+		or Status == 429
+		or Status >= 500
 end
 
 return EarnBatcher
