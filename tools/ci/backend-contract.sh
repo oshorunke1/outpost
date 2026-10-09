@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# The game-backend-contract CI job, as one script so it runs the same way on a laptop.
+# The game-backend-contract CI job, as one script so it runs the same way on a Linux laptop.
+# It needs bash 4 or newer and real POSIX signals, so it does not run under Git Bash on Windows
+# (SIGTERM does not reach node there) or the stock bash 3.2 on macOS (no mapfile -d).
 # It migrates and seeds the database, boots the built backend with the exact command its Docker image
 # runs (the Dockerfile CMD, read by tools/dockerfile-cmd.mjs, never through pnpm), waits for /readyz,
 # runs the game-server simulator (pnpm demo), then runs the Lune contract suite CONTRACT_RUNS times in a
@@ -18,6 +20,9 @@ set -euo pipefail
 READY_TIMEOUT_SECONDS="${READY_TIMEOUT_SECONDS:-30}"
 STOP_TIMEOUT_SECONDS="${STOP_TIMEOUT_SECONDS:-30}"
 CONTRACT_RUNS="${CONTRACT_RUNS:-2}"
+case "$CONTRACT_RUNS" in
+  "" | *[!0-9]* | 0) echo "CONTRACT_RUNS must be a whole number of at least 1" >&2; exit 1 ;;
+esac
 export PATH="$HOME/.rokit/bin:$PATH"
 export OUTPOST_BACKEND_URL="http://127.0.0.1:${PORT}"
 LOG_FILE="$(mktemp)"
