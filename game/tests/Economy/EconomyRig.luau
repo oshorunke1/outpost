@@ -24,7 +24,19 @@ local EconomyRig = {}
 
 EconomyRig.BootTag = "boot-0badf00d"
 
-function EconomyRig.new(Options: { Intercept: ((Request: any) -> any?)? }?)
+local function Copy(Value: any): any
+	if type(Value) ~= "table" then
+		return Value
+	end
+	local Out = {}
+	for Key, Inner in Value do
+		Out[Key] = Copy(Inner)
+	end
+	return Out
+end
+
+-- Client lets a second rig share the first one's ledger, the way two servers share one backend.
+function EconomyRig.new(Options: { Intercept: ((Request: any) -> any?)?, Client: any? }?)
 	local Given = Options or {}
 	local Clock = { Now = 0 }
 	local Transport, Controls = MockTransport.new(Shop, Flags :: any, Telemetry, function()
@@ -37,6 +49,8 @@ function EconomyRig.new(Options: { Intercept: ((Request: any) -> any?)? }?)
 		Warnings = {},
 		Rejoins = {},
 		Saves = {} :: { [number]: Save },
+		-- What the DataStore holds, the save as of its last confirmed SaveNow or as it was loaded.
+		Durable = {} :: { [number]: Save },
 		AutoRejoin = false,
 		FailGrant = false,
 		FailMark = false,
@@ -93,7 +107,7 @@ function EconomyRig.new(Options: { Intercept: ((Request: any) -> any?)? }?)
 	end)
 	local Core
 	Core = EconomyCore.new({
-		Client = Client,
+		Client = Given.Client or Client,
 		Requests = Requests,
 		PurchaseFlow = PurchaseFlow,
 		LegacyCredit = LegacyCredit,
@@ -127,9 +141,14 @@ function EconomyRig.new(Options: { Intercept: ((Request: any) -> any?)? }?)
 				Save.LegacyCredited = true
 				return true
 			end,
-			SaveNow = function(_UserId: number)
+			SaveNow = function(UserId: number)
 				Rig.SaveNowCalls += 1
-				return not Rig.FailSaveNow
+				table.insert(Rig.Sends, { Method = "SAVE", Url = "save-now", Headers = {} })
+				if Rig.FailSaveNow or Rig.Saves[UserId] == nil then
+					return false
+				end
+				Rig.Durable[UserId] = Copy(Rig.Saves[UserId])
+				return true
 			end,
 		},
 		Now = function()
@@ -149,13 +168,13 @@ function EconomyRig.new(Options: { Intercept: ((Request: any) -> any?)? }?)
 		end,
 	})
 	Rig.Core = Core
-	Rig.Client = Client
+	Rig.Client = Given.Client or Client
 	Rig.Batcher = Batcher
 	Rig.Guard = Guard
 
 	-- The player's real balance in the mock's ledger, or nil when the mock never saw them join.
 	function Rig.Wallet(UserId: number): number?
-		local Response = Client:Send(Requests.Wallet(UserId))
+		local Response = Rig.Client:Send(Requests.Wallet(UserId))
 		return if Response.Status == 200 then Response.Body.balance else nil
 	end
 
@@ -180,6 +199,8 @@ function EconomyRig.new(Options: { Intercept: ((Request: any) -> any?)? }?)
 				Match = string.match(Url, "/sessions$") ~= nil
 			elseif Kind == "fulfilled" then
 				Match = string.match(Url, "/fulfilled$") ~= nil
+			elseif Kind == "save" then
+				Match = Url == "save-now"
 			elseif Kind == "unfulfilled" then
 				Match = string.find(Url, "unfulfilled=1", 1, true) ~= nil
 			end
@@ -203,12 +224,27 @@ function EconomyRig.new(Options: { Intercept: ((Request: any) -> any?)? }?)
 	-- LegacyCoins also runs the steps after the join, so purchases are open straight away.
 	function Rig.Player(UserId: number, Save: Save?, Joined: boolean?)
 		Rig.Saves[UserId] = Save or { OwnedItems = {} }
+		Rig.Durable[UserId] = Copy(Rig.Saves[UserId])
 		if Joined ~= false then
 			assert(Core:Join(UserId), "the join should land")
 			if Rig.Saves[UserId].LegacyCoins == nil then
 				assert(Core:AfterJoin(UserId), "the steps after the join should settle")
 			end
 		end
+	end
+
+	-- The position of the first request of one kind in Sends, or nil.
+	function Rig.FirstAt(Kind: string): number?
+		local First = Rig.Sent(Kind)[1]
+		return if First then table.find(Rig.Sends, First) else nil
+	end
+
+	-- The server dies. A new server on the same ledger loads what the DataStore held, and the
+	-- player joins it.
+	function Rig.Crash(UserId: number)
+		local Next = EconomyRig.new({ Client = Rig.Client })
+		Next.Player(UserId, Copy(Rig.Durable[UserId]))
+		return Next
 	end
 
 	return Rig

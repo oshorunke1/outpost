@@ -1,8 +1,8 @@
 --!strict
 -- ShopService sells cosmetics for Coins. The client only names the item it wants.
 -- On a ledger server the backend sets the price and takes the Coins. EconomyService checks the
--- player does not own the item, buys it, writes it into the save and only then acknowledges it.
--- If that write fails the purchase stays unacknowledged, and the next join grants it.
+-- player does not own the item, buys it and writes it into the save. It is acknowledged only once
+-- a confirmed save holds it. Until then it stays unacknowledged, and the next join grants it.
 -- A player still on the old save buys from the save exactly as in M1. The price comes from
 -- Configs/Shop, and the check and the charge happen inside one Update with no waiting in between,
 -- so two quick buys can never both pay out. A paused player can't buy until they reach a ledger server.

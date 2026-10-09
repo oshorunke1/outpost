@@ -13,8 +13,8 @@
 -- and no purchase runs before the join reconcile has finished.
 -- A purchase sends the player's unsent Coins first, then buys with the key PurchaseGuard keeps for
 -- that item until a definite answer, all inside one 10 second deadline. A Grant writes the item into
--- the save and then acknowledges it. If the write fails the purchase stays unacknowledged, and the
--- reconcile on the next join grants it.
+-- the save and acknowledges it only once a confirmed save holds it. Until then the purchase stays
+-- unacknowledged, and the reconcile on the next join grants it.
 --
 -- Legacy credit. Coins a player saved before the ledger are credited once in fixed chunks, see
 -- LegacyCredit. The save that holds them is written to the DataStore first, so the amount can never
@@ -289,6 +289,25 @@ function EconomyCore.Acknowledge(self: EconomyCore, TransactionId: string): bool
 	return Response.Status >= 200 and Response.Status < 300
 end
 
+-- Acknowledges purchases only once a confirmed save holds their items. Save.Grant only changes
+-- the save in memory, and a crash, a DataStore outage or another server taking the save could
+-- still lose that. An unacknowledged purchase stays on the backend's unfulfilled list, so the
+-- next join's reconcile grants it again. Granting is safe to repeat, an owned item is skipped.
+function EconomyCore.AcknowledgeWhenSaved(self: EconomyCore, UserId: number, TransactionIds: { string }): boolean
+	if #TransactionIds == 0 then
+		return true
+	end
+	local Deps = self.Deps
+	if not Deps.Save.SaveNow(UserId) then
+		Deps.Warn(`the save for {UserId} was not confirmed, {#TransactionIds} purchases wait for the next join`)
+		return false
+	end
+	for _, TransactionId in TransactionIds do
+		self:Acknowledge(TransactionId)
+	end
+	return true
+end
+
 -- Runs Work while holding the player's lock. Nil when someone else holds it.
 local function WithLock(self: EconomyCore, UserId: number, Work: () -> any): (boolean, any)
 	local Guard = self.Deps.Guard
@@ -320,9 +339,9 @@ function EconomyCore.Reconcile(self: EconomyCore, UserId: number): boolean
 		if #Plan.Grant > 0 and not Deps.Save.Grant(UserId, Plan.Grant) then
 			return false
 		end
-		for _, TransactionId in Plan.Ack do
-			self:Acknowledge(TransactionId)
-		end
+		Deps.Spawn(function()
+			self:AcknowledgeWhenSaved(UserId, Plan.Ack)
+		end)
 		return true
 	end)
 	return Ran and Result == true
@@ -360,7 +379,7 @@ local function Buy(self: EconomyCore, UserId: number, ItemId: string): Decision
 		return { Action = "Grant", Outcome = "Unavailable", TransactionId = TransactionId }
 	end
 	Deps.Spawn(function()
-		self:Acknowledge(TransactionId)
+		self:AcknowledgeWhenSaved(UserId, { TransactionId })
 	end)
 	return Decision
 end
