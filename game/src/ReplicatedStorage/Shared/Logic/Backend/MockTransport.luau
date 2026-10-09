@@ -156,8 +156,10 @@ local function CheckPurchase(Body: any, Catalog: Catalog): boolean
 		and type(Catalog[Body.itemId]) == "table"
 end
 
+-- An empty table or a list goes over the wire as a JSON array, and the server's strict dims object
+-- refuses an array, so the mock refuses both too.
 local function CheckDims(Dims: any, Schema: Schema): boolean
-	if type(Dims) ~= "table" then
+	if type(Dims) ~= "table" or next(Dims) == nil then
 		return false
 	end
 	for Key, Value in Dims do

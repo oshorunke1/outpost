@@ -461,6 +461,9 @@ Describe("MockTransport telemetry", function()
 			Event({ userId = 1.5 }),
 			Event({ value = 2e9 }),
 			Event({ value = "1" }),
+			-- An empty table and a list both reach the server as a JSON array, never an object.
+			Event({ dims = {} }),
+			Event({ dims = { "Open" } }),
 			5,
 		}
 		local Mixed: { [any]: any } = { Event() }

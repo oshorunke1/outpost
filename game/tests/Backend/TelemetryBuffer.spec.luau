@@ -298,6 +298,16 @@ Describe("TelemetryBuffer.CleanDims", function()
 		Expect(Buffer:Take(2)).ToEqual({ { name = "purchase_result", ts = Ts }, { name = "purchase_result", ts = Ts } })
 	end)
 
+	-- An empty Luau table goes over the wire as [], which the server refuses as dims, so it is left out.
+	It("an empty dims table is left off the event, never sent as an empty list", function()
+		local Buffer = TelemetryBuffer.new(10, Telemetry)
+		Expect(TelemetryBuffer.CleanDims({}, Telemetry)).ToBeNil()
+		Expect(Buffer:Push({ name = "player_join", ts = Ts, dims = {} })).ToBe(true)
+		local Taken = Buffer:Take(1)[1]
+		Expect(Taken).ToEqual({ name = "player_join", ts = Ts })
+		Expect(rawget(Taken :: any, "dims")).ToBeNil()
+	end)
+
 	It("the config lists match the server's schema.ts and catalog.ts", function()
 		local Schema = Fs.readFile("../backend/src/modules/telemetry/schema.ts")
 		local Catalog = Fs.readFile("../backend/src/modules/economy/catalog.ts")
