@@ -27,6 +27,11 @@ export const MAX_STORABLE_TS = Date.UTC(10000, 0, 1) - 1;
 // counted, with a log line) if MySQL refuses it as data (I1).
 export const MAX_DELIVERIES = 5;
 
+// A consumer idle this long with nothing pending is left over from an old container (each one names
+// its consumer hostname-pid) and is removed at startup. One that still owns pending entries stays:
+// XAUTOCLAIM hands those entries on, and deleting the consumer would drop them from the group.
+export const IDLE_CONSUMER_MS = 60 * 60_000;
+
 export interface StreamEntry {
   id: string;
   event: TelemetryEvent | null; // null when the payload is missing or invalid
@@ -63,6 +68,22 @@ export interface TelemetryWorker {
   pending(): Promise<number>;
   // XLEN and XPENDING in one go, for the length and pending gauges. Task 20's loop calls it.
   sampleStream(): Promise<{ length: number; pending: number }>;
+  // Deletes other consumers idle over minIdleMs with nothing pending. Returns their names.
+  removeIdleConsumers(minIdleMs?: number): Promise<string[]>;
+}
+
+// XINFO CONSUMERS answers one flat [field, value, ...] list per consumer.
+interface ConsumerInfo {
+  name: string;
+  pending: number;
+  idle: number; // milliseconds since the consumer last read, claimed or acked
+}
+
+function consumerInfo(fields: unknown): ConsumerInfo | null {
+  if (!Array.isArray(fields)) return null;
+  const read = (field: string): unknown => fields[fields.indexOf(field) + 1];
+  const name = read('name');
+  return typeof name === 'string' ? { name, pending: Number(read('pending')), idle: Number(read('idle')) } : null;
 }
 
 function decode(payload: unknown): TelemetryEvent | null {
@@ -318,5 +339,17 @@ export function createTelemetryWorker(deps: WorkerDeps): TelemetryWorker {
       deps.metrics?.streamPending.set(pendingCount);
       return { length, pending: pendingCount };
     },
+    // Each XGROUP DELCONSUMER is its own call, so a consumer that picked up work after XINFO
+    // could in theory lose its pending entries; one idle for an hour is not coming back.
+    removeIdleConsumers: (minIdleMs = IDLE_CONSUMER_MS) =>
+      withGroup([], async () => {
+        const reply: unknown = await redis.xinfo('CONSUMERS', STREAM_KEY, GROUP);
+        const idle = (Array.isArray(reply) ? reply : [])
+          .map(consumerInfo)
+          .filter((info): info is ConsumerInfo => info !== null && info.name !== consumer && info.pending === 0 && info.idle > minIdleMs)
+          .map((info) => info.name);
+        for (const name of idle) await redis.xgroup('DELCONSUMER', STREAM_KEY, GROUP, name);
+        return idle;
+      }),
   };
 }
