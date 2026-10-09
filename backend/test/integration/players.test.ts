@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import type { AppDeps } from '../../src/app.js';
 import { FAST_ARGON2, createArgon2Hasher, makeDummyHash } from '../../src/modules/identity/crypto/password.js';
 import { createMysqlServiceClientRepo } from '../../src/modules/identity/repos/serviceClientRepo.js';
+import { limiterKey } from '../../src/modules/identity/guards.js';
 import { GAME_SCOPES } from '../../src/modules/identity/scopes.js';
 import { GAME_CLIENT_ID } from '../../src/modules/identity/seed.js';
 import { createMysqlPlayersService } from '../../src/modules/players/playersService.js';
@@ -18,11 +19,13 @@ describe('players on MySQL', () => {
   let app: ZodApp;
   let headers: { authorization: string };
   let tokens: AppDeps['tokens'];
+  let apiLimiter: AppDeps['apiLimiter'];
   beforeAll(async () => {
     ctx = await createIntegrationContext();
     const built = await createIntegrationApp(ctx);
     app = built.app;
     tokens = built.deps.tokens;
+    apiLimiter = built.deps.apiLimiter;
     // MySQL starts with no service clients, so register the game server before signing its token.
     const hasher = createArgon2Hasher(FAST_ARGON2);
     await createMysqlServiceClientRepo(ctx.db, systemClock).upsert({
@@ -41,6 +44,18 @@ describe('players on MySQL', () => {
     const [rows] = await ctx.db.query<RowDataPacket[]>(sql, params);
     return Number(rows[0]?.n);
   };
+
+  // Every test here shares one app, so one per-client API bucket (API_LIMIT, 100 then 50 a second).
+  // A burst test starts from a full bucket, otherwise on a fast runner the requests of the earlier
+  // tests have not refilled yet and some joins are 429 rate_limited, which is not what it checks.
+  const fullBucket = () => apiLimiter.forget(limiterKey(GAME_CLIENT_ID));
+  const statuses = (responses: { statusCode: number }[]) => {
+    const histogram: Record<number, number> = {};
+    for (const r of responses) histogram[r.statusCode] = (histogram[r.statusCode] ?? 0) + 1;
+    return histogram;
+  };
+  const otherBodies = (responses: { statusCode: number; body: string }[]) =>
+    [...new Set(responses.filter((r) => r.statusCode !== 200).map((r) => r.body))].join('; ');
 
   // Review Focus 2: ids above 2^32 and up to 2^53 - 1 round-trip exactly.
   test('big UserIds survive MySQL BIGINT and JSON unchanged', async () => {
@@ -115,10 +130,11 @@ describe('players on MySQL', () => {
   });
 
   test('concurrent joins for the same UserId all answer 200 and make one player, account and balance', async () => {
+    fullBucket();
     const responses = await Promise.all(
       Array.from({ length: 40 }, () => app.inject({ method: 'POST', url: '/v1/players/7007/sessions', headers })),
     );
-    expect(responses.map((r) => r.statusCode)).toEqual(Array.from({ length: 40 }, () => 200));
+    expect(statuses(responses), otherBodies(responses)).toEqual({ 200: 40 });
     for (const r of responses) expect(r.json()).toEqual({ userId: 7007, balance: 0 });
     expect(await count('SELECT COUNT(*) AS n FROM players WHERE roblox_user_id = 7007')).toBe(1);
     expect(await count('SELECT COUNT(*) AS n FROM accounts WHERE roblox_user_id = 7007')).toBe(1);
@@ -127,10 +143,11 @@ describe('players on MySQL', () => {
 
   test('concurrent joins across many players and repeats produce no 500s', async () => {
     const ids = Array.from({ length: 15 }, (_, i) => 8000 + i);
+    fullBucket();
     const responses = await Promise.all(
       ids.flatMap((id) => Array.from({ length: 4 }, () => app.inject({ method: 'POST', url: `/v1/players/${id}/sessions`, headers }))),
     );
-    expect(responses.every((r) => r.statusCode === 200)).toBe(true);
+    expect(statuses(responses), otherBodies(responses)).toEqual({ 200: 60 });
     expect(await count('SELECT COUNT(*) AS n FROM accounts WHERE roblox_user_id BETWEEN 8000 AND 8014')).toBe(15);
   });
 
