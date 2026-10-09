@@ -6,6 +6,7 @@ import type { MemoryApp } from '../../../src/memoryDeps.js';
 import { FLAG_DEFAULTS, createMemoryFlagsService } from '../../../src/modules/flags/flagsService.js';
 import type { FlagsService } from '../../../src/modules/flags/flagsService.js';
 import type { TelemetryProducer } from '../../../src/modules/telemetry/producer.js';
+import { TELEMETRY_FLAGS_TIMEOUT_MS } from '../../../src/modules/telemetry/routes.js';
 import { AppError } from '../../../src/platform/errors.js';
 import type { ZodApp } from '../../../src/platform/http.js';
 import { createFakeClock } from '../../support/clock.js';
@@ -181,5 +182,32 @@ describe('telemetry and the TelemetryEnabled flag', () => {
     expect(response.json()).toEqual({ accepted: 2, dropped: 0 });
     expect(failing.telemetry.published).toHaveLength(2);
     expect(lines.join('')).toContain('flags unavailable; telemetry stays on');
+  });
+
+  test('a slow flags store never holds a batch past the 250 ms bound; it fails open and logs', async () => {
+    const lines: string[] = [];
+    const sink = new Writable({
+      write(chunk: Buffer, _encoding, done) {
+        lines.push(chunk.toString());
+        done();
+      },
+    });
+    // A store that never answers, like MySQL behind dropped packets.
+    const stuck: FlagsService = { list: () => new Promise(() => undefined) };
+    const slow = await createMemoryAppDeps({ clock, overrides: { flags: stuck } });
+    const slowApp = await buildApp({ ...slow.deps, config: { ...MEMORY_CONFIG, logLevel: 'info' } }, { logStream: sink });
+    const started = performance.now();
+    const response = await slowApp.inject({ method: 'POST', url: '/v1/telemetry/batch', headers: bearer(await gameToken(slow.deps.tokens)), payload: batch(clock.now()) });
+    const elapsed = performance.now() - started;
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({ accepted: 2, dropped: 0 });
+    expect(slow.telemetry.published).toHaveLength(2);
+    expect(elapsed).toBeGreaterThanOrEqual(TELEMETRY_FLAGS_TIMEOUT_MS - 20);
+    expect(elapsed).toBeLessThan(TELEMETRY_FLAGS_TIMEOUT_MS + 750);
+    expect(lines.join('')).toContain('flags lookup took too long; telemetry stays on');
+  });
+
+  test('the flags lookup bound is 250 ms', () => {
+    expect(TELEMETRY_FLAGS_TIMEOUT_MS).toBe(250);
   });
 });

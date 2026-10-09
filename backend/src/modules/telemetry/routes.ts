@@ -21,12 +21,28 @@ export interface TelemetryRouteDeps {
 
 // TelemetryEnabled off means every event is dropped. If flags cannot be read at all, telemetry
 // fails open and stays on, because losing the flag must not also lose the data.
+// The lookup is bounded too, so a slow MySQL never holds a batch for long.
+export const TELEMETRY_FLAGS_TIMEOUT_MS = 250;
+
 async function telemetryEnabled(deps: TelemetryRouteDeps, log: { warn(details: object, message: string): void }): Promise<boolean> {
+  const lookup = deps.flags.list();
+  lookup.catch(() => undefined); // a lookup that fails after the bound must not go unhandled
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<'late'>((resolve) => {
+    timer = setTimeout(() => resolve('late'), TELEMETRY_FLAGS_TIMEOUT_MS);
+  });
   try {
-    return (await deps.flags.list()).TelemetryEnabled !== false;
+    const flags = await Promise.race([lookup, late]);
+    if (flags === 'late') {
+      log.warn({ timeoutMs: TELEMETRY_FLAGS_TIMEOUT_MS }, 'flags lookup took too long; telemetry stays on');
+      return true;
+    }
+    return flags.TelemetryEnabled !== false;
   } catch (error) {
     log.warn({ cause: summarizeCause(error) }, 'flags unavailable; telemetry stays on');
     return true;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
