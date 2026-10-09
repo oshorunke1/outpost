@@ -466,6 +466,12 @@ function EconomyCore.AfterJoin(self: EconomyCore, UserId: number): boolean
 	return Progress.Reconciled and Progress.Legacy
 end
 
+-- Forgets that the steps after the join were settled, so the next AfterJoin runs them again.
+-- For an operator who fixed a refused legacy credit, or a Studio tester.
+function EconomyCore.ResetProgress(self: EconomyCore, UserId: number)
+	self.Progress[UserId] = nil
+end
+
 -- The player left. Their waiting Coins go out now, and a running purchase keeps its lock and key.
 function EconomyCore.Leave(self: EconomyCore, UserId: number)
 	local Deps = self.Deps
