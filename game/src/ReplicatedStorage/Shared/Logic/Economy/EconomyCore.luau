@@ -489,6 +489,15 @@ function EconomyCore.AfterJoin(self: EconomyCore, UserId: number): boolean
 	return Progress.Reconciled and Progress.Legacy
 end
 
+-- A new visit starts. The player joins the backend again, which fetches their balance, and the
+-- steps after the join run again. This happens when they arrive, not when they leave, because
+-- batches still retrying after a leave need the old join to keep going.
+function EconomyCore.BeginVisit(self: EconomyCore, UserId: number)
+	self.Joined[UserId] = nil
+	self.Progress[UserId] = nil
+	self.Known[UserId] = nil
+end
+
 -- Forgets that the steps after the join were settled, so the next AfterJoin runs them again.
 -- For an operator who fixed a refused legacy credit, or a Studio tester.
 function EconomyCore.ResetProgress(self: EconomyCore, UserId: number)

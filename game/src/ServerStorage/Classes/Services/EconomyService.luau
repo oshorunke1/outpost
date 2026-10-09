@@ -143,7 +143,9 @@ local function JoinLoop(UserId: number)
 end
 
 local function OnProfileLoaded(Player: Player)
-	if DataService:EconomyFor(Player) == "Ledger" then
+	local Running = Core
+	if Running ~= nil and DataService:EconomyFor(Player) == "Ledger" then
+		Running:BeginVisit(Player.UserId)
 		JoinLoop(Player.UserId)
 	end
 end
