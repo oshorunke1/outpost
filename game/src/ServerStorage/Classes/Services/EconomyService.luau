@@ -19,6 +19,7 @@ local PurchaseFlow = require(Shared.Logic.Backend.PurchaseFlow)
 local Requests = require(Shared.Logic.Backend.Requests)
 local RetryPolicy = require(Shared.Logic.Backend.RetryPolicy)
 local EconomyCore = require(Shared.Logic.Economy.EconomyCore)
+local JoinLoop = require(Shared.Logic.Economy.JoinLoop)
 local LegacyCredit = require(Shared.Logic.Economy.LegacyCredit)
 local PurchaseGuard = require(Shared.Logic.Economy.PurchaseGuard)
 local ItemId = require(Shared.Enums.ItemId)
@@ -42,7 +43,7 @@ EconomyService.Priority = 20
 
 local Rng = Random.new()
 local Core: EconomyCore.EconomyCore? = nil
-local Joining: { [number]: boolean } = {}
+local Loops: JoinLoop.JoinLoop? = nil
 
 local function Warn(Message: string)
 	warn(`[EconomyService] {Message}`)
@@ -104,42 +105,20 @@ local function PushFor(UserId: number)
 	end
 end
 
--- Joins the player to the backend, retrying with backoff until it lands, then runs the reconcile
--- and the legacy credit until both are settled. Only one runs per player. It keeps going after the
--- player leaves only while Coins are held for them, and gives those up after LeftJoinSeconds.
-local function JoinLoop(UserId: number)
-	local Running = Core
-	if Running == nil or Joining[UserId] then
-		return
+-- Runs the join steps for the player's current visit, see Shared JoinLoop. A loop left over from
+-- an earlier visit stops by itself, so it never gets in the way of this one.
+local function RunJoin(UserId: number)
+	local Running = Loops
+	if Running ~= nil then
+		Running:Run(UserId)
 	end
-	Joining[UserId] = true
-	local Attempt = 0
-	local LeftAt: number? = nil
-	while true do
-		local Here = LoadedPlayer(UserId) ~= nil
-		local Step = Running:JoinStep(UserId, Here)
-		PushFor(UserId)
-		if Step == "Done" then
-			break
-		end
-		if not Here then
-			LeftAt = LeftAt or os.clock()
-			if os.clock() - (LeftAt :: number) > LeftJoinSeconds then
-				Running:DropHeld(UserId)
-				break
-			end
-		end
-		Attempt += 1
-		task.wait(math.max(1, RetryPolicy.DelayFor(EconomyCore.JoinPolicy, Attempt, Rng:NextNumber())))
-	end
-	Joining[UserId] = nil
 end
 
 local function OnProfileLoaded(Player: Player)
-	local Running = Core
+	local Running = Loops
 	if Running ~= nil and DataService:EconomyFor(Player) == "Ledger" then
 		Running:BeginVisit(Player.UserId)
-		JoinLoop(Player.UserId)
+		RunJoin(Player.UserId)
 	end
 end
 
@@ -231,7 +210,7 @@ function EconomyService:RunJoinSteps(Player: Player)
 	local Running = Core
 	if Running ~= nil and DataService:EconomyFor(Player) == "Ledger" then
 		Running:ResetProgress(Player.UserId)
-		task.spawn(JoinLoop, Player.UserId)
+		task.spawn(RunJoin, Player.UserId)
 	end
 end
 
@@ -279,8 +258,24 @@ function EconomyService:Init()
 		end,
 		Warn = Warn,
 		Rejoin = function(UserId: number)
-			task.spawn(JoinLoop, UserId)
+			task.spawn(RunJoin, UserId)
 		end,
+	})
+	Loops = JoinLoop.new({
+		Core = Core,
+		IsHere = function(UserId: number)
+			return LoadedPlayer(UserId) ~= nil
+		end,
+		Push = PushFor,
+		Wait = function(Seconds: number)
+			task.wait(Seconds)
+		end,
+		Now = os.clock,
+		DelayFor = function(Attempt: number)
+			return RetryPolicy.DelayFor(EconomyCore.JoinPolicy, Attempt, Rng:NextNumber())
+		end,
+		LeftJoinSeconds = LeftJoinSeconds,
+		Warn = Warn,
 	})
 	DataService:SetCoinsSource(function(Player: Player)
 		local Running = Core

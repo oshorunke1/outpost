@@ -16,7 +16,7 @@
       "hasInit": true,
       "hasStart": true,
       "kind": "service",
-      "lineCount": 309,
+      "lineCount": 304,
       "listens": [],
       "name": "EconomyService",
       "path": "game/src/ServerStorage/Classes/Services/EconomyService.luau"
