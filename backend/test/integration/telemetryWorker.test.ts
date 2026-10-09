@@ -6,6 +6,8 @@ import type { Clock } from '../../src/platform/clock.js';
 import { systemClock } from '../../src/platform/clock.js';
 import { CommitOutcomeUnknownError, isDuplicateKey } from '../../src/platform/db.js';
 import type { RowDataPacket } from '../../src/platform/db.js';
+import { createMetrics } from '../../src/platform/metrics.js';
+import { counterValue } from '../support/metrics.js';
 import { createIntegrationContext } from './support/context.js';
 import type { IntegrationContext } from './support/context.js';
 import { beforeQueryDb, failingCommitDb, rejectingQueryDb, spyQueryDb } from './support/failingDb.js';
@@ -366,5 +368,28 @@ describe('telemetry worker on Redis and MySQL', () => {
     expect(await countRows('telemetry_processed')).toBe(2000);
     expect(await workers[0]?.pending()).toBe(0);
     expect(deadlockDelta).toBe(0);
+  });
+  test('with metrics, each run is counted by result and sampleStream sets the length and pending gauges', async () => {
+    const metrics = createMetrics();
+    const a = worker('a', { metrics });
+    await a.ensureGroup();
+    await ctx.redis.xadd(STREAM_KEY, '*', 'e', '{oops');
+    await publish(2);
+    await a.runOnce();
+    expect(await counterValue(metrics.workerEntries, { result: 'applied' })).toBe(2);
+    expect(await counterValue(metrics.workerEntries, { result: 'malformed' })).toBe(1);
+    expect(await counterValue(metrics.workerEntries, { result: 'duplicate' })).toBe(0);
+    expect(await counterValue(metrics.workerEntries, { result: 'dead_letter' })).toBe(0);
+
+    await publish(4);
+    expect(await worker('b').readNew()).toHaveLength(4); // read but never acked
+    await expect(a.sampleStream()).resolves.toEqual({ length: 7, pending: 4 });
+    const text = await metrics.registry.metrics();
+    expect(text).toContain('telemetry_stream_length 7');
+    expect(text).toContain('telemetry_stream_pending 4');
+  });
+
+  test('sampleStream without metrics still reports, and an empty stream reads zero', async () => {
+    await expect(worker('a').sampleStream()).resolves.toEqual({ length: 0, pending: 0 });
   });
 });

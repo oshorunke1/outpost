@@ -1,6 +1,8 @@
 import type { Clock } from '../../platform/clock.js';
 import { isDuplicateKey, withTransaction } from '../../platform/db.js';
 import type { Db, ResultSetHeader, RowDataPacket, TransactionLogger } from '../../platform/db.js';
+import { recordWorkerRun } from '../../platform/metrics.js';
+import type { Metrics } from '../../platform/metrics.js';
 import type { Redis } from '../../platform/redis.js';
 import { STREAM_KEY } from './producer.js';
 import { rollUp } from './rollup.js';
@@ -48,6 +50,7 @@ export interface WorkerDeps {
   blockMs?: number;
   claimIdleMs?: number;
   pruneBatchSize?: number; // rows per DELETE pass in prune (default 10000)
+  metrics?: Metrics; // when set, runOnce counts entries by result and sampleStream sets the gauges
 }
 
 export interface TelemetryWorker {
@@ -58,6 +61,8 @@ export interface TelemetryWorker {
   runOnce(): Promise<ProcessResult>;
   prune(olderThanMs?: number): Promise<number>;
   pending(): Promise<number>;
+  // XLEN and XPENDING in one go, for the length and pending gauges. Task 20's loop calls it.
+  sampleStream(): Promise<{ length: number; pending: number }>;
 }
 
 function decode(payload: unknown): TelemetryEvent | null {
@@ -277,6 +282,12 @@ export function createTelemetryWorker(deps: WorkerDeps): TelemetryWorker {
     return total;
   }
 
+  const pending = (): Promise<number> =>
+    withGroup(0, async () => {
+      const summary = await redis.xpending(STREAM_KEY, GROUP);
+      return Array.isArray(summary) ? Number(summary[0] ?? 0) : 0;
+    });
+
   return {
     ensureGroup,
     readNew,
@@ -284,21 +295,28 @@ export function createTelemetryWorker(deps: WorkerDeps): TelemetryWorker {
     process,
     async runOnce() {
       const total = empty();
-      const claimed = await reclaim();
       try {
-        await processClaimed(claimed, total);
-      } catch (error) {
-        // They stay pending and come back on a later reclaim; new data goes ahead regardless.
-        logger.error({ entries: claimed.length, ...errorFields(error) }, 'reclaimed telemetry batch failed; its entries stay pending');
+        const claimed = await reclaim();
+        try {
+          await processClaimed(claimed, total);
+        } catch (error) {
+          // They stay pending and come back on a later reclaim; new data goes ahead regardless.
+          logger.error({ entries: claimed.length, ...errorFields(error) }, 'reclaimed telemetry batch failed; its entries stay pending');
+        }
+        addInto(total, await process(await readNew()));
+        return total;
+      } finally {
+        // Counted even when the new read throws, so work already committed is never missed.
+        if (deps.metrics) recordWorkerRun(deps.metrics, total);
       }
-      addInto(total, await process(await readNew()));
-      return total;
     },
     prune,
-    pending: () =>
-      withGroup(0, async () => {
-        const summary = await redis.xpending(STREAM_KEY, GROUP);
-        return Array.isArray(summary) ? Number(summary[0] ?? 0) : 0;
-      }),
+    pending,
+    async sampleStream() {
+      const [length, pendingCount] = await Promise.all([redis.xlen(STREAM_KEY), pending()]);
+      deps.metrics?.streamLength.set(length);
+      deps.metrics?.streamPending.set(pendingCount);
+      return { length, pending: pendingCount };
+    },
   };
 }
