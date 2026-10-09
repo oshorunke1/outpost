@@ -8,7 +8,8 @@ const ok: ProcessResult = { applied: 1, duplicates: 0, malformed: 0, deadLettere
 
 interface HarnessOptions {
   runOnce: (call: number) => Promise<ProcessResult>;
-  prune?: (call: number) => Promise<number>;
+  prune?: (call: number, abort: () => void) => Promise<number>;
+  sample?: (abort: () => void) => void;
   stopAfterRuns: number;
   random?: () => number;
 }
@@ -35,10 +36,11 @@ function harness(options: HarnessOptions) {
     async prune() {
       prunes += 1;
       events.push(`prune${prunes}`);
-      return options.prune ? options.prune(prunes) : 0;
+      return options.prune ? options.prune(prunes, () => controller.abort()) : 0;
     },
     async sampleStream() {
       events.push('sample');
+      options.sample?.(() => controller.abort());
       return { length: 0, pending: 0 };
     },
   };
@@ -131,5 +133,29 @@ describe('runWorkerLoop', () => {
     await h.done;
     expect(finished).toBe(true);
     expect(h.runs()).toBe(1);
+  });
+
+  // M4: SIGTERM can land while the loop prunes or samples. No new batch may start after that,
+  // since one more XREADGROUP block would eat into the shutdown deadline.
+  test('an abort during sampling stops the loop before another run', async () => {
+    const h = harness({ runOnce: async () => ok, stopAfterRuns: 100, sample: (abort) => abort() });
+    await h.done;
+    expect(h.runs()).toBe(0);
+    expect(h.events).toEqual(['prune1', 'sample']);
+  });
+
+  test('an abort during a prune that hit the cap stops pruning and starts no run', async () => {
+    const cap = MAX_PRUNE_PASSES * 10;
+    const h = harness({
+      runOnce: async () => ok,
+      stopAfterRuns: 100,
+      prune: async (call, abort) => {
+        abort();
+        return call === 1 ? cap : 3; // more rows are left after the first call, but the worker is stopping
+      },
+    });
+    await h.done;
+    expect(h.events.filter((event) => event.startsWith('prune'))).toEqual(['prune1']);
+    expect(h.runs()).toBe(0);
   });
 });
