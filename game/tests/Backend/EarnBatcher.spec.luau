@@ -356,7 +356,7 @@ Describe("EarnBatcher retries", function()
 
 	It("a definite refusal is never requeued and is counted with its Coins", function()
 		local Batcher = Make()
-		for Index, Status in { 400, 404, 409, 422, 418 } do
+		for Index, Status in { 400, 404, 409, 422, 418, 199, 300 } do
 			Batcher:Add(1001, Index, 0)
 			local Flush = Batcher:TakeFor(1001) :: Flush
 			local Outcome, Evicted = Batcher:Requeue(Flush, Status, 0)
@@ -365,7 +365,7 @@ Describe("EarnBatcher retries", function()
 			Expect(Flush.Attempts).ToBe(0)
 		end
 		Expect(Batcher:RetryCount()).ToBe(0)
-		Expect({ Batcher:TakeRefused() }).ToEqual({ 5, 15 })
+		Expect({ Batcher:TakeRefused() }).ToEqual({ 7, 28 })
 		Expect({ Batcher:TakeRefused() }).ToEqual({ 0, 0 })
 		Expect({ Batcher:TakeDropped() }).ToEqual({ 0, 0 })
 	end)
