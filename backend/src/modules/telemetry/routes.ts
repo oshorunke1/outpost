@@ -3,6 +3,7 @@ import type { Clock } from '../../platform/clock.js';
 import { AppError, summarizeCause } from '../../platform/errors.js';
 import { errorBody } from '../../platform/http.js';
 import type { ZodApp } from '../../platform/http.js';
+import type { Metrics } from '../../platform/metrics.js';
 import { requireService } from '../identity/guards.js';
 import type { FlagsService } from '../flags/flagsService.js';
 import type { GuardFor } from '../identity/guards.js';
@@ -16,6 +17,7 @@ export interface TelemetryRouteDeps {
   telemetry: TelemetryProducer;
   clock: Clock;
   flags: FlagsService;
+  metrics: Metrics;
   guardFor: GuardFor;
 }
 
@@ -72,15 +74,18 @@ export function registerTelemetryRoutes(app: ZodApp, deps: TelemetryRouteDeps): 
     async (request, reply) => {
       const principal = requireService(request);
       if (!(await telemetryEnabled(deps, request.log))) {
+        deps.metrics.telemetryDropped.inc({ reason: 'disabled' }, request.body.events.length);
         return reply.code(202).send({ accepted: 0, dropped: request.body.events.length });
       }
       const { kept, dropped } = splitByClock(request.body.events, deps.clock.now());
+      deps.metrics.telemetryDropped.inc({ reason: 'clock_skew' }, dropped);
       try {
         if (kept.length > 0) await deps.telemetry.publish(principal.clientId, kept);
       } catch (error) {
         // The game treats telemetry as fail open and drops the batch; the API just says so.
         throw new AppError(503, 'telemetry_unavailable', 'Telemetry is temporarily unavailable', { cause: error });
       }
+      deps.metrics.telemetryAccepted.inc(kept.length);
       return reply.code(202).send({ accepted: kept.length, dropped });
     },
   );

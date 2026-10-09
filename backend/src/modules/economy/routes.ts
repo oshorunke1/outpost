@@ -1,6 +1,8 @@
 import { z } from 'zod';
+import { AppError } from '../../platform/errors.js';
 import { errorBody } from '../../platform/http.js';
 import type { ZodApp } from '../../platform/http.js';
+import type { Metrics } from '../../platform/metrics.js';
 import { requireService } from '../identity/guards.js';
 import type { GuardFor } from '../identity/guards.js';
 import { userIdBody, userIdParams } from '../players/params.js';
@@ -41,7 +43,7 @@ const bearer = [{ bearer: [] }];
 // The ledger records who wrote each transaction under this name.
 const ledgerPrincipal = (clientId: string) => `svc:${clientId}`;
 
-export function registerEconomyRoutes(app: ZodApp, deps: { ledger: LedgerService; guardFor: GuardFor }): void {
+export function registerEconomyRoutes(app: ZodApp, deps: { ledger: LedgerService; metrics: Metrics; guardFor: GuardFor }): void {
   const economy = deps.guardFor('game:economy');
 
   app.post(
@@ -59,12 +61,24 @@ export function registerEconomyRoutes(app: ZodApp, deps: { ledger: LedgerService
     },
     async (request, reply) => {
       const principal = requireService(request);
-      const outcome = await deps.ledger.submit({
-        principal: ledgerPrincipal(principal.clientId),
-        idempotencyKey: request.headers['idempotency-key'],
-        request: request.body,
-      });
-      if (outcome.replayed) void reply.header('idempotent-replayed', 'true');
+      const kind = request.body.kind;
+      let outcome;
+      try {
+        outcome = await deps.ledger.submit({
+          principal: ledgerPrincipal(principal.clientId),
+          idempotencyKey: request.headers['idempotency-key'],
+          request: request.body,
+        });
+      } catch (error) {
+        // AppError codes are a fixed vocabulary; anything else is just error, never its message.
+        deps.metrics.ledgerTransactions.inc({ kind, outcome: error instanceof AppError ? error.code : 'error' });
+        throw error;
+      }
+      deps.metrics.ledgerTransactions.inc({ kind, outcome: outcome.replayed ? 'replayed' : 'created' });
+      if (outcome.replayed) {
+        deps.metrics.idempotentReplays.inc();
+        void reply.header('idempotent-replayed', 'true');
+      }
       return reply.code(outcome.replayed ? 200 : 201).send({ ...outcome.result, replayed: outcome.replayed });
     },
   );
