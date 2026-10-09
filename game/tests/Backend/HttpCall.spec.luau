@@ -93,10 +93,10 @@ Describe("HttpCall.Race", function()
 
 	It("waits on a timer of the given length while the request is out", function()
 		local Rig = NewRig()
-		local Got = Start(Rig, Slow, 15)
+		local Got = Start(Rig, Slow, 7)
 		Expect(Got.Count).ToBe(0)
 		Expect(#Rig.Timers).ToBe(1)
-		Expect(Rig.Timers[1].Seconds).ToBe(15)
+		Expect(Rig.Timers[1].Seconds).ToBe(7)
 	end)
 
 	It("an answer before the timeout wins, and the timer firing later changes nothing", function()
@@ -192,6 +192,10 @@ Describe("HttpCall.ToResponse", function()
 		local Response = HttpCall.ToResponse({ Success = true, StatusCode = 201, Headers = {}, Body = "{}" }, Decode)
 		Expect(Response.Ok).ToBe(true)
 		Expect(Response.Status).ToBe(201)
+		-- Ok never comes from the status, only from what Roblox says in Success.
+		local Refused = HttpCall.ToResponse({ Success = false, StatusCode = 200, Headers = {} }, Decode)
+		Expect(Refused.Ok).ToBe(false)
+		Expect(Refused.Status).ToBe(200)
 	end)
 
 	It("an empty, missing or garbled body comes back as nil with the status kept", function()
