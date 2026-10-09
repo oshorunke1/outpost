@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { systemClock } from './clock.js';
 import type { Clock } from './clock.js';
 import type { ZodApp } from './http.js';
+import { named } from './schemas.js';
 
 export interface HealthReport {
   ok: boolean;
@@ -114,14 +115,15 @@ export function createHealthChecks(probes: Record<string, () => Promise<unknown>
   };
 }
 
-const readyBody = z.object({ status: z.enum(['ready', 'not_ready', 'draining']), checks: z.record(z.string(), z.enum(['ok', 'fail'])) });
+const readyBody = named('Readiness', z.object({ status: z.enum(['ready', 'not_ready', 'draining']), checks: z.record(z.string(), z.enum(['ok', 'fail'])) }));
+const liveBody = named('Health', z.object({ status: z.literal('ok') }));
 
 // healthz says the process is up (liveness) and never touches a dependency, so a database outage
 // never gets the process restarted. readyz says it can serve traffic (readiness).
 export function registerHealthRoutes(app: ZodApp, health: HealthChecks): void {
   const liveness = { tags: ['ops'], operationId: 'getHealth', summary: 'Liveness, the process is up', security: [] };
   const readiness = { tags: ['ops'], operationId: 'getReadiness', summary: 'Readiness, MySQL and Redis both answer', security: [] };
-  app.get('/healthz', { schema: { ...liveness, response: { 200: z.object({ status: z.literal('ok') }) } } }, () => ({ status: 'ok' as const }));
+  app.get('/healthz', { schema: { ...liveness, response: { 200: liveBody } } }, () => ({ status: 'ok' as const }));
   app.get('/readyz', { schema: { ...readiness, response: { 200: readyBody, 503: readyBody } } }, async (_request, reply) => {
     const report = await health.ready();
     const status = report.draining ? 'draining' : report.ok ? 'ready' : 'not_ready';

@@ -47,7 +47,8 @@ describe('player routes', () => {
     expect(joined.statusCode).toBe(200);
     expect(joined.json()).toEqual({ userId: 1001, balance: 0 });
     expect((await app.inject({ method: 'GET', url: '/v1/players/1001/wallet', headers })).json()).toEqual({ userId: 1001, balance: 0 });
-    expect((await app.inject({ method: 'POST', url: '/v1/players/1001/sessions/end', headers })).statusCode).toBe(204);
+    const ended = await app.inject({ method: 'POST', url: '/v1/players/1001/sessions/end', headers });
+    expect({ status: ended.statusCode, body: ended.body, type: ended.headers['content-type'] }).toEqual({ status: 204, body: '', type: undefined });
   });
 
   test('a wallet for a player who never joined is 404 player_not_found', async () => {

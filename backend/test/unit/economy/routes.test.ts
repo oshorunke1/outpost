@@ -181,7 +181,8 @@ describe('POST /v1/economy/transactions', () => {
 describe('fulfilled and unfulfilled purchase routes', () => {
   test('fulfilled validates the id and passes the caller principal to the ledger', async () => {
     const id = randomUUID();
-    expect((await app.inject({ method: 'POST', url: `/v1/economy/transactions/${id}/fulfilled`, headers })).statusCode).toBe(204);
+    const fulfilled = await app.inject({ method: 'POST', url: `/v1/economy/transactions/${id}/fulfilled`, headers });
+    expect({ status: fulfilled.statusCode, body: fulfilled.body, type: fulfilled.headers['content-type'] }).toEqual({ status: 204, body: '', type: undefined });
     expect(calls).toEqual([{ fulfilled: id, principal: 'svc:game-server' }]);
     const bad = await app.inject({ method: 'POST', url: '/v1/economy/transactions/not-a-uuid/fulfilled', headers });
     expect(bad.statusCode).toBe(400);

@@ -1,12 +1,14 @@
 import { z } from 'zod';
 import { errorBody } from '../../platform/http.js';
+import { named } from '../../platform/schemas.js';
 import type { ZodApp } from '../../platform/http.js';
 import type { GuardFor } from '../identity/guards.js';
 import { userIdParams } from './params.js';
 import type { PlayersService } from './playersService.js';
 
-export const walletSchema = z.object({ userId: z.number().int(), balance: z.number().int() });
-const gameErrors = { 400: errorBody, 401: errorBody, 403: errorBody, 404: errorBody, 429: errorBody };
+export const walletSchema = named('Wallet', z.object({ userId: z.number().int(), balance: z.number().int() }));
+// 503 comes from the guard when the client lookup cannot reach MySQL.
+const gameErrors = { 400: errorBody, 401: errorBody, 403: errorBody, 404: errorBody, 429: errorBody, 503: errorBody };
 const bearer = [{ bearer: [] }];
 
 export function registerPlayerRoutes(app: ZodApp, deps: { players: PlayersService; guardFor: GuardFor }): void {
@@ -38,12 +40,12 @@ export function registerPlayerRoutes(app: ZodApp, deps: { players: PlayersServic
         summary: 'A player left a game server',
         security: bearer,
         params: userIdParams,
-        response: { 204: z.null(), ...gameErrors },
+        response: { 204: z.undefined(), ...gameErrors },
       },
     },
     async (request, reply) => {
       await deps.players.leave(request.params.userId);
-      return reply.code(204).send(null);
+      return reply.code(204).send();
     },
   );
 

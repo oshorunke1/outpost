@@ -116,6 +116,7 @@ describe('identity routes', () => {
     const b = await accessToken();
     const all = await app.inject({ method: 'POST', url: '/auth/logout/all', headers: { authorization: `Bearer ${a}` } });
     expect(all.statusCode).toBe(204);
+    expect({ body: all.body, type: all.headers['content-type'] }).toEqual({ body: '', type: undefined });
     for (const token of [a, b]) {
       expectError(await app.inject({ method: 'GET', url: '/auth/sessions', headers: { authorization: `Bearer ${token}` } }), 401, 'unauthorized');
     }

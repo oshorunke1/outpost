@@ -3,6 +3,7 @@ import { AppError } from '../../platform/errors.js';
 import { errorBody } from '../../platform/http.js';
 import type { ZodApp } from '../../platform/http.js';
 import type { Metrics } from '../../platform/metrics.js';
+import { named } from '../../platform/schemas.js';
 import { requireService } from '../identity/guards.js';
 import type { GuardFor } from '../identity/guards.js';
 import { userIdBody, userIdParams } from '../players/params.js';
@@ -13,10 +14,12 @@ import { EARN_REASONS, MAX_EARN_PER_TRANSACTION } from './plan.js';
 
 // Strict on both arms, so a client-sent price, balance or anything else extra is a 400 instead of
 // being quietly dropped. The backend is the only price authority.
-const transactionBody = z.discriminatedUnion('kind', [
+const earnRequest = named(
+  'EarnRequest',
   z.object({ kind: z.literal('earn'), userId: userIdBody, amount: z.number().int().min(1).max(MAX_EARN_PER_TRANSACTION), reason: z.enum(EARN_REASONS) }).strict(),
-  z.object({ kind: z.literal('purchase'), userId: userIdBody, itemId: z.enum(ITEM_IDS) }).strict(),
-]);
+);
+const purchaseRequest = named('PurchaseRequest', z.object({ kind: z.literal('purchase'), userId: userIdBody, itemId: z.enum(ITEM_IDS) }).strict());
+const transactionBody = named('TransactionRequest', z.discriminatedUnion('kind', [earnRequest, purchaseRequest]));
 
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9:_-]{8,128}$/;
 
@@ -26,19 +29,25 @@ const idempotencyHeaders = z.looseObject({ 'idempotency-key': z.string().regex(I
 // The ledger stores each result as MySQL JSON, which hands keys back in its own order. Serializing
 // through this schema fixes the order, so a replay is byte for byte the first answer apart from
 // replayed itself.
-const transactionReply = z.object({
-  transactionId: z.uuid(),
-  kind: z.enum(['earn', 'purchase', 'refund']),
-  userId: z.number().int(),
-  amount: z.number().int(),
-  balanceAfter: z.number().int(),
-  itemId: z.enum(ITEM_IDS).nullable(),
-  createdAt: z.string(),
-  replayed: z.boolean(),
-});
+const transactionReply = named(
+  'TransactionResult',
+  z.object({
+    transactionId: z.uuid(),
+    kind: z.enum(['earn', 'purchase', 'refund']),
+    userId: z.number().int(),
+    amount: z.number().int(),
+    balanceAfter: z.number().int(),
+    itemId: z.enum(ITEM_IDS).nullable(),
+    createdAt: z.string(),
+    replayed: z.boolean(),
+  }),
+);
 
-const purchase = z.object({ transactionId: z.uuid(), itemId: z.enum(ITEM_IDS), createdAt: z.string() });
-const errors = { 400: errorBody, 401: errorBody, 403: errorBody, 404: errorBody, 409: errorBody, 422: errorBody, 429: errorBody, 503: errorBody };
+const purchase = named('Purchase', z.object({ transactionId: z.uuid(), itemId: z.enum(ITEM_IDS), createdAt: z.string() }));
+const purchaseList = named('PurchaseList', z.object({ purchases: z.array(purchase) }));
+// Every game route can fail in the guard (401, 403, 429, 503 when MySQL is down) or on a bad
+// param (400). Each route adds only the ledger errors it can really return.
+const guardErrors = { 400: errorBody, 401: errorBody, 403: errorBody, 429: errorBody, 503: errorBody };
 const bearer = [{ bearer: [] }];
 
 // The ledger records who wrote each transaction under this name.
@@ -58,7 +67,9 @@ export function registerEconomyRoutes(app: ZodApp, deps: { ledger: LedgerService
         security: bearer,
         headers: idempotencyHeaders,
         body: transactionBody,
-        response: { 200: transactionReply, 201: transactionReply, ...errors },
+        response: { 200: transactionReply, 201: transactionReply, ...guardErrors, 404: errorBody, 409: errorBody, 413: errorBody, 422: errorBody },
+        // 200 is always a replay. The ledger's busy and unknown-commit 503s say when to retry.
+        'x-response-headers': { 200: { 'idempotent-replayed': 'always' }, 503: { 'retry-after': 'sometimes' } },
       },
     },
     async (request, reply) => {
@@ -96,14 +107,14 @@ export function registerEconomyRoutes(app: ZodApp, deps: { ledger: LedgerService
         summary: 'The game granted the purchased item. Safe to repeat. Only the client that made the purchase can acknowledge it.',
         security: bearer,
         params: z.object({ id: z.uuid() }),
-        response: { 204: z.null(), ...errors },
+        response: { 204: z.undefined(), ...guardErrors, 404: errorBody },
       },
     },
     async (request, reply) => {
       const principal = requireService(request);
       // Someone else's purchase answers the same 404 as a missing one, so ids do not leak.
       await deps.ledger.markFulfilled(request.params.id, ledgerPrincipal(principal.clientId));
-      return reply.code(204).send(null);
+      return reply.code(204).send();
     },
   );
 
@@ -118,7 +129,7 @@ export function registerEconomyRoutes(app: ZodApp, deps: { ledger: LedgerService
         security: bearer,
         params: userIdParams,
         querystring: z.object({ unfulfilled: z.literal('1') }).strict(),
-        response: { 200: z.object({ purchases: z.array(purchase) }), ...errors },
+        response: { 200: purchaseList, ...guardErrors },
       },
     },
     async (request) => ({ purchases: await deps.ledger.unfulfilledPurchases(request.params.userId) }),

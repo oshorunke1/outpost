@@ -4,6 +4,7 @@ import { AppError, summarizeCause } from '../../platform/errors.js';
 import { errorBody } from '../../platform/http.js';
 import type { ZodApp } from '../../platform/http.js';
 import type { Metrics } from '../../platform/metrics.js';
+import { named } from '../../platform/schemas.js';
 import { requireService } from '../identity/guards.js';
 import type { FlagsService } from '../flags/flagsService.js';
 import type { GuardFor } from '../identity/guards.js';
@@ -12,6 +13,9 @@ import { splitByClock, telemetryBatchSchema } from './schema.js';
 
 // A full batch of 500 events is far over the 16 KiB app wide limit, so this route has its own.
 export const TELEMETRY_BODY_LIMIT_BYTES = 512 * 1024;
+
+const telemetryBatch = named('TelemetryBatch', telemetryBatchSchema);
+const telemetryAccepted = named('TelemetryAccepted', z.object({ accepted: z.number().int(), dropped: z.number().int() }));
 
 export interface TelemetryRouteDeps {
   telemetry: TelemetryProducer;
@@ -60,9 +64,9 @@ export function registerTelemetryRoutes(app: ZodApp, deps: TelemetryRouteDeps): 
         operationId: 'submitTelemetryBatch',
         summary: 'Queue up to 500 gameplay and health events. Answers before any database work.',
         security: [{ bearer: [] }],
-        body: telemetryBatchSchema,
+        body: telemetryBatch,
         response: {
-          202: z.object({ accepted: z.number().int(), dropped: z.number().int() }),
+          202: telemetryAccepted,
           400: errorBody,
           401: errorBody,
           403: errorBody,
