@@ -61,10 +61,18 @@ describe('ledger counters', () => {
     expect(await counterValue(metrics.ledgerTransactions, { kind: 'purchase', outcome: 'created' })).toBe(0);
   });
 
-  test('an unexpected failure counts as error, never with its message', async () => {
+  test('an unexpected failure counts as other, never with its message', async () => {
     const { response, metrics } = await submitWith(async () => Promise.reject(new Error('socket hang up for player 1001')), earn);
     expect(response.statusCode).toBe(500);
-    expect(await counterValue(metrics.ledgerTransactions, { kind: 'earn', outcome: 'error' })).toBe(1);
+    expect(await counterValue(metrics.ledgerTransactions, { kind: 'earn', outcome: 'other' })).toBe(1);
     expect(await metrics.registry.metrics()).not.toContain('socket hang up');
+  });
+
+  // M3: only the ledger's own codes become label values, so a code from another layer cannot add series.
+  test('an AppError with a code the ledger does not define counts as other', async () => {
+    const { response, metrics } = await submitWith(async () => Promise.reject(new AppError(409, 'made_up_code_42', 'refused')), purchase);
+    expect(response.statusCode).toBe(409);
+    expect(await counterValue(metrics.ledgerTransactions, { kind: 'purchase', outcome: 'other' })).toBe(1);
+    expect(await metrics.registry.metrics()).not.toContain('made_up_code_42');
   });
 });

@@ -7,6 +7,7 @@ import { requireService } from '../identity/guards.js';
 import type { GuardFor } from '../identity/guards.js';
 import { userIdBody, userIdParams } from '../players/params.js';
 import { ITEM_IDS } from './catalog.js';
+import { LEDGER_ERROR_CODES } from './ledger.js';
 import type { LedgerService } from './ledger.js';
 import { EARN_REASONS, MAX_EARN_PER_TRANSACTION } from './plan.js';
 
@@ -70,8 +71,9 @@ export function registerEconomyRoutes(app: ZodApp, deps: { ledger: LedgerService
           request: request.body,
         });
       } catch (error) {
-        // AppError codes are a fixed vocabulary; anything else is just error, never its message.
-        deps.metrics.ledgerTransactions.inc({ kind, outcome: error instanceof AppError ? error.code : 'error' });
+        // Only the ledger's own codes become label values; anything else is other, never its message.
+        const known = error instanceof AppError && Object.hasOwn(LEDGER_ERROR_CODES, error.code);
+        deps.metrics.ledgerTransactions.inc({ kind, outcome: known ? error.code : 'other' });
         throw error;
       }
       deps.metrics.ledgerTransactions.inc({ kind, outcome: outcome.replayed ? 'replayed' : 'created' });
