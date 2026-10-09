@@ -3,7 +3,7 @@
 
 export interface ShutdownStep {
   name: string;
-  run(): Promise<unknown> | void;
+  run(): unknown; // awaited, so a promise is waited for
 }
 
 export interface ShutdownLogger {
@@ -87,9 +87,79 @@ export function onShutdownSignal(handler: (signal: 'SIGTERM' | 'SIGINT') => unkn
   }
 }
 
-// Sets the exit code and lets the event loop drain, so the tracing SDK can flush its last spans.
-// If something still holds the loop open, the process exits anyway after graceMs.
-export function exitWhenDrained(code: number, graceMs = 5_000): void {
-  process.exitCode = code;
-  setTimeout(() => process.exit(code), graceMs).unref();
+// Process exits and timers, injected in tests so nothing really exits or waits.
+export interface ExitDeps {
+  exit(code: number): void;
+  setExitCode(code: number): void;
+  setTimer(callback: () => void, ms: number): { unref(): unknown };
+}
+
+const processExitDeps: ExitDeps = {
+  exit: (code) => process.exit(code),
+  setExitCode: (code) => {
+    process.exitCode = code;
+  },
+  setTimer: (callback, ms) => setTimeout(callback, ms),
+};
+
+// The whole shutdown, from the signal to the last step, gets this long. Compose gives the backend
+// and the worker a stop_grace_period of 15 s, so this deadline fires (and logs) before Docker's SIGKILL.
+export const SHUTDOWN_DEADLINE_MS = 10_000;
+
+// Armed when the signal arrives. If shutdown has not finished by then (a request that never ends,
+// a hung batch), it logs and exits 1. The timer is unref'd, so a clean shutdown never waits on it.
+export function armShutdownDeadline(logger: ShutdownLogger, deadlineMs = SHUTDOWN_DEADLINE_MS, deps: Partial<ExitDeps> = {}): void {
+  const { exit, setTimer } = { ...processExitDeps, ...deps };
+  setTimer(() => {
+    logger.error({ deadlineMs }, 'shutdown did not finish within the deadline, exiting');
+    exit(1);
+  }, deadlineMs).unref();
+}
+
+// Sets the exit code and lets the event loop drain instead of cutting it off. If something still
+// holds the loop open, the process exits anyway after graceMs (an unref'd timer, so it never delays
+// a clean exit).
+//
+// Tracing: the OpenTelemetry register (--import .../register) adds its own SIGTERM listener that
+// shuts the SDK down the moment the signal arrives, in parallel with this ordered shutdown, and it
+// has no switch to turn that off. So on SIGTERM the spans of the drain itself (requests that finish
+// inside app.close, the worker's last batch) are dropped. On SIGINT and on a normal exit the SDK
+// shuts down through beforeExit, after the drain, and those spans are kept.
+export function exitWhenDrained(code: number, graceMs = 5_000, deps: Partial<ExitDeps> = {}): void {
+  const { exit, setExitCode, setTimer } = { ...processExitDeps, ...deps };
+  setExitCode(code);
+  setTimer(() => exit(code), graceMs).unref();
+}
+
+// Thrown by Startup.open once a stop signal has arrived, so main stops starting things up.
+export class StartupAborted extends Error {
+  constructor() {
+    super('a stop signal arrived during startup');
+    this.name = 'StartupAborted';
+  }
+}
+
+export interface Startup {
+  // Runs create, remembers close for it, then checks the signal. A signal that arrived before or
+  // during create throws StartupAborted (after recording close, so the new resource is still closed).
+  open<T>(name: string, create: () => Promise<T> | T, close?: (resource: T) => unknown): Promise<T>;
+  // Close steps for everything opened, newest first.
+  closeSteps(): ShutdownStep[];
+}
+
+// The entry points install the signal hook before any startup work. A SIGTERM during startup (the
+// container is stopped while MySQL is still connecting) then stops after the step in flight and
+// closes only what was opened, instead of being lost while the process starts serving anyway.
+export function createStartup(signal: AbortSignal): Startup {
+  const steps: ShutdownStep[] = [];
+  return {
+    async open(name, create, close) {
+      if (signal.aborted) throw new StartupAborted();
+      const resource = await create();
+      if (close) steps.unshift({ name, run: () => close(resource) });
+      if (signal.aborted) throw new StartupAborted();
+      return resource;
+    },
+    closeSteps: () => [...steps],
+  };
 }

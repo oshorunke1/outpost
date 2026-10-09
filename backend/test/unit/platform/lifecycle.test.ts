@@ -1,6 +1,17 @@
 import { EventEmitter } from 'node:events';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { describe, expect, test } from 'vitest';
-import { onShutdownSignal, serverShutdownSteps, shutdownInOrder, workerShutdownSteps } from '../../../src/platform/lifecycle.js';
+import {
+  SHUTDOWN_DEADLINE_MS,
+  StartupAborted,
+  armShutdownDeadline,
+  createStartup,
+  exitWhenDrained,
+  onShutdownSignal,
+  serverShutdownSteps,
+  shutdownInOrder,
+  workerShutdownSteps,
+} from '../../../src/platform/lifecycle.js';
 
 const recordingLogger = () => {
   const errors: { details: Record<string, unknown>; message: string }[] = [];
@@ -80,5 +91,83 @@ describe('lifecycle', () => {
     onShutdownSignal((signal) => void seenOther.push(signal), other);
     other.emit('SIGINT');
     expect(seenOther).toEqual(['SIGINT']);
+  });
+
+  // R-a: a stuck step (a request that never finishes, a hung batch) must not keep the process up
+  // until Docker's SIGKILL. The deadline logs and exits 1 first.
+  test('a hanging close hits the deadline, which logs and exits 1', async () => {
+    expect(SHUTDOWN_DEADLINE_MS).toBe(10_000);
+    const calls: string[] = [];
+    const resources = fakeResources(calls);
+    resources.app.close = () => new Promise<undefined>(() => undefined);
+    const { errors, logger } = recordingLogger();
+    const exits: number[] = [];
+    armShutdownDeadline(logger, 30, { exit: (code) => void exits.push(code) });
+    void shutdownInOrder(serverShutdownSteps(resources), logger);
+    await sleep(80);
+    expect(calls).toEqual(['draining']);
+    expect(exits).toEqual([1]);
+    expect(errors).toEqual([{ details: { deadlineMs: 30 }, message: 'shutdown did not finish within the deadline, exiting' }]);
+  });
+
+  test('the deadline timer never holds a clean exit open', () => {
+    const timers: { ms: number; unrefed: boolean }[] = [];
+    const setTimer = (_callback: () => void, ms: number) => {
+      const timer = { ms, unrefed: false, unref: () => (timer.unrefed = true) };
+      timers.push(timer);
+      return timer;
+    };
+    armShutdownDeadline(recordingLogger().logger, undefined, { setTimer, exit: () => undefined });
+    expect(timers.map(({ ms, unrefed }) => ({ ms, unrefed }))).toEqual([{ ms: SHUTDOWN_DEADLINE_MS, unrefed: true }]);
+  });
+
+  // M5: the exit code is set at once and the loop drains; the fallback exit is unref'd, so it
+  // only fires when something still holds the loop open.
+  test('exitWhenDrained sets the exit code and arms an unref fallback exit', () => {
+    const codes: number[] = [];
+    const exits: number[] = [];
+    let fire: () => void = () => undefined;
+    const timers: { ms: number; unrefed: boolean }[] = [];
+    exitWhenDrained(0, 5_000, {
+      setExitCode: (code) => void codes.push(code),
+      exit: (code) => void exits.push(code),
+      setTimer: (callback, ms) => {
+        fire = callback;
+        const timer = { ms, unrefed: false, unref: () => (timer.unrefed = true) };
+        timers.push(timer);
+        return timer;
+      },
+    });
+    expect(codes).toEqual([0]);
+    expect(exits).toEqual([]);
+    expect(timers.map(({ ms, unrefed }) => ({ ms, unrefed }))).toEqual([{ ms: 5_000, unrefed: true }]);
+    fire();
+    expect(exits).toEqual([0]);
+  });
+
+  // M1: the signal hook goes in before any startup work. A signal during startup stops it after
+  // the step in flight, and only what was opened gets closed, newest first.
+  test('a signal during startup stops after the current step and closes what was opened, newest first', async () => {
+    const controller = new AbortController();
+    const startup = createStartup(controller.signal);
+    const log: string[] = [];
+    await startup.open('mysql pool', async () => log.push('open mysql'), () => void log.push('close mysql'));
+    await expect(
+      startup.open('redis', async () => {
+        controller.abort(); // SIGTERM lands while Redis connects
+        log.push('open redis');
+      }, () => void log.push('close redis')),
+    ).rejects.toBeInstanceOf(StartupAborted);
+    await expect(startup.open('metrics server', async () => log.push('open metrics'))).rejects.toBeInstanceOf(StartupAborted);
+    const { logger } = recordingLogger();
+    expect(await shutdownInOrder(startup.closeSteps(), logger)).toBe(0);
+    expect(log).toEqual(['open mysql', 'open redis', 'close redis', 'close mysql']);
+  });
+
+  test('without a signal, startup opens everything and hands back each resource', async () => {
+    const startup = createStartup(new AbortController().signal);
+    expect(await startup.open('a', () => 41)).toBe(41);
+    expect(await startup.open('b', async () => 'two')).toBe('two');
+    expect(startup.closeSteps().map((step) => step.name)).toEqual([]);
   });
 });
