@@ -113,6 +113,16 @@ Describe("EconomyCore durable acknowledgement", function()
 		Expect(Unfulfilled(Rig, 1001)).ToBe(0)
 		Expect(Rig.Wallet(1001)).ToBe(5)
 	end)
+
+	It("skips SaveNow when there is nothing to acknowledge", function()
+		local Rig = EconomyRig.new()
+		Rig.Player(1001)
+		Expect(Rig.SaveNowCalls).ToBe(0)
+		Expect(Rig.Core:Reconcile(1001)).ToBe(true)
+		Expect(Rig.Core:AcknowledgeWhenSaved(1001, {})).ToBe(true)
+		Expect(Rig.SaveNowCalls).ToBe(0)
+		Expect(#Rig.Sent("fulfilled")).ToBe(0)
+	end)
 end)
 
 return nil
