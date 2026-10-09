@@ -23,6 +23,7 @@ Connect the Rojo plugin in Studio to see the game. No backend and no Docker are 
 | Format | `stylua src tests scripts` |
 | Lint | `selene src tests scripts` |
 | Every check in the `luau` CI job | `bash ../tools/ci/luau-check.sh` |
+| Contract tests against a running backend | `lune run tests/Contract/Run` (needs `OUTPOST_BACKEND_URL` and `OUTPOST_GAME_API_KEY`) |
 | Build a place file | `rojo build default.project.json --output build/Outpost.rbxl` |
 
 ## Layout

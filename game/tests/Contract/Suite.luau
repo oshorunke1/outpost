@@ -57,7 +57,8 @@ function Suite.Run(Label: string, Client: any, UserId: number, KeyPrefix: string
 
 	local function Event(Fields: { [string]: any }?): { [string]: any }
 		local Built: { [string]: any } = { name = "player_join", ts = NowMillis(), userId = UserId }
-		for Field, Value in Fields or {} do
+		local Extra: { [string]: any } = Fields or {}
+		for Field, Value in Extra do
 			Built[Field] = Value
 		end
 		return Built
