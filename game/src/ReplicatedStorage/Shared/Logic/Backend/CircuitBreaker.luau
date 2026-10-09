@@ -110,16 +110,14 @@ end
 
 -- Records a finished call by its HTTP status. A 5xx or no answer is a failure, and any other real
 -- answer, 429 included, is a success because the backend is clearly up. A local refusal below zero
--- never reached the backend, so it changes nothing. A neutral 408 or 425 changes nothing either,
--- except that a half open breaker frees its probe slot so the next call can probe again.
+-- never reached the backend, so it changes nothing. A neutral 408 or 425 changes nothing either.
+-- It may belong to an older call rather than the probe, so it does not even free the probe slot.
+-- A probe that never gets a real answer is let go by the usual probe timeout instead.
 function CircuitBreaker.RecordResult(self: CircuitBreaker, Now: number, Status: number)
 	if Status ~= Status or Status < 0 then
 		return
 	end
 	if CircuitBreaker.IsNeutral(Status) then
-		if self.Current == "HalfOpen" then
-			self.ProbeStartedAt = nil
-		end
 		return
 	end
 	if CircuitBreaker.CountsAsFailure(Status) then

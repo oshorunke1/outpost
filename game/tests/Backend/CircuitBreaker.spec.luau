@@ -223,14 +223,17 @@ Describe("CircuitBreaker:RecordResult", function()
 		end
 	end)
 
-	It("a half open probe that gets a 408 or 425 stays half open and frees the probe slot", function()
+	-- Task 25 fix M8. A 408 or 425 may come from an older call that was in flight before the probe,
+	-- so it must not free the probe slot. Only a success, a failure or the probe timeout do that.
+	It("a 408 or 425 in half open keeps the probe slot taken until the probe times out", function()
 		for _, Status in { 408, 425 } do
 			local Breaker = Opened()
 			Expect(Breaker:Allow(30)).ToBe(true)
 			Breaker:RecordResult(31, Status)
 			Expect(Breaker:State()).ToBe("HalfOpen")
-			Expect(Breaker:Allow(32)).ToBe(true)
-			Expect(Breaker:Allow(33)).ToBe(false)
+			Expect(Breaker:Allow(32)).ToBe(false)
+			Expect(Breaker:Allow(59)).ToBe(false)
+			Expect(Breaker:Allow(60)).ToBe(true)
 		end
 	end)
 
