@@ -16,6 +16,8 @@ export interface AppConfig {
   host: string;
   port: number;
   metricsPort: number;
+  // Where the metrics server listens. Loopback by default; Compose sets 0.0.0.0 on its private network.
+  metricsHost: string;
   databaseUrl: string;
   redisUrl: string;
   jwtIssuer: string;
@@ -74,6 +76,7 @@ const envSchema = z.object({
   HOST: z.string().min(1).default('0.0.0.0'),
   PORT: port.default(3000),
   METRICS_PORT: port.default(9464),
+  METRICS_HOST: z.string().min(1).default('127.0.0.1'),
   DATABASE_URL: z.string().startsWith('mysql://'),
   REDIS_URL: z.string().regex(/^rediss?:\/\//),
   JWT_ISSUER: z.string().min(1).default('outpost'),
@@ -125,6 +128,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     host: e.HOST,
     port: e.PORT,
     metricsPort: e.METRICS_PORT,
+    metricsHost: e.METRICS_HOST,
     databaseUrl: e.DATABASE_URL,
     redisUrl: e.REDIS_URL,
     jwtIssuer: e.JWT_ISSUER,

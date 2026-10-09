@@ -20,6 +20,7 @@ describe('loadConfig', () => {
       host: '0.0.0.0',
       port: 3000,
       metricsPort: 9464,
+      metricsHost: '127.0.0.1',
       databaseUrl: base.DATABASE_URL,
       redisUrl: base.REDIS_URL,
       jwtIssuer: 'outpost',
@@ -28,6 +29,12 @@ describe('loadConfig', () => {
       trustProxy: false,
       telemetryApiLimit: { capacity: 200, refillPerSecond: 150 },
     });
+  });
+
+  // S4-F10: the metrics server binds to loopback unless METRICS_HOST says otherwise (Compose sets 0.0.0.0).
+  test('METRICS_HOST sets where the metrics server listens', () => {
+    expect(loadConfig({ ...base, METRICS_HOST: '0.0.0.0' }).metricsHost).toBe('0.0.0.0');
+    expect(messageOf({ ...base, METRICS_HOST: '' })).toContain('METRICS_HOST');
   });
 
   // S4-F5: the telemetry route has its own bucket, sized from TELEMETRY_API_LIMIT.

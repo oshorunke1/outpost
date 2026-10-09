@@ -38,6 +38,7 @@ export const MEMORY_CONFIG: AppConfig = {
   host: '127.0.0.1',
   port: 0,
   metricsPort: 0,
+  metricsHost: '127.0.0.1',
   databaseUrl: 'mysql://unused',
   redisUrl: 'redis://unused',
   jwtIssuer: 'outpost',
