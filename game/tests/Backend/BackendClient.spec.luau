@@ -469,4 +469,116 @@ Describe("BackendClient breaker per route group", function()
 	end)
 end)
 
+-- Task 25 fix round 1. The deadline also holds for a thread that waited on someone else's token
+-- exchange, the shared exchange is capped, and a stuck exchange is replaced instead of waited on.
+Describe("BackendClient deadline and the shared exchange", function()
+	local function Count(Calls: { TransportRequest }, Path: string): number
+		local Found = 0
+		for _, Call in Calls do
+			if Call.Url == `http://backend.test{Path}` then
+				Found += 1
+			end
+		end
+		return Found
+	end
+
+	-- Runs Send on its own thread and hands back a table that gets the result once it finishes.
+	local function Spawn(Rig: Rig, Request: any, Options: any?): { Result: Response? }
+		local Holder: { Result: Response? } = { Result = nil }
+		local Thread = coroutine.create(function()
+			Holder.Result = Rig.Client:Send(Request, Options)
+		end)
+		assert(coroutine.resume(Thread))
+		return Holder
+	end
+
+	-- Token exchanges yield until the test resumes them, every other call answers 200 at once.
+	local function ExchangeRig(): (Rig, { thread })
+		local Exchanges: { thread } = {}
+		local Rig: Rig
+		Rig = MakeRig({}, nil, function(Request: TransportRequest): Response
+			table.insert(Rig.Calls, Request)
+			if string.find(Request.Url, "/auth/service-token", 1, true) then
+				table.insert(Exchanges, coroutine.running())
+				return coroutine.yield()
+			end
+			return Reply(200, {})
+		end)
+		return Rig, Exchanges
+	end
+
+	-- The reviewer's repro. A purchase with a 10 s deadline joins a background call's exchange,
+	-- which only comes back at 100 s. The purchase must give up without ever being sent.
+	It("a 10 s purchase that waited on a slow shared exchange gets RetryLater and is never sent", function()
+		local Rig, Exchanges = ExchangeRig()
+		local Background = Spawn(Rig, Requests.Wallet(1001))
+		local Purchase = Spawn(Rig, Requests.Purchase(1001, "RedHat", "key-123456"), { DeadlineSeconds = 10 })
+		Expect(#Exchanges).ToBe(1)
+		Rig.Advance(100)
+		assert(coroutine.resume(Exchanges[1], TokenReply("tok-1")))
+		Expect((Purchase.Result :: Response).Status).ToBe(BackendClient.RetryLater)
+		Expect(Count(Rig.Calls, "/v1/economy/transactions")).ToBe(0)
+		Expect((Background.Result :: Response).Status).ToBe(200)
+	end)
+
+	It("a call whose deadline passed during the 401 refresh is not sent again", function()
+		local Rig: Rig
+		Rig = MakeRig({
+			TokenReply("tok-1"),
+			function(): Response
+				Rig.Advance(20)
+				return Reply(401)
+			end,
+			TokenReply("tok-2"),
+		})
+		local Result = Rig.Client:Send(Requests.Wallet(1001), { DeadlineSeconds = 10 })
+		Expect(Result.Status).ToBe(BackendClient.RetryLater)
+		Expect(#Rig.Calls).ToBe(2)
+	end)
+
+	It("the shared exchange is capped, so a long Retry-After on it gives RetryLater at once", function()
+		Expect(BackendClient.ExchangeDeadlineSeconds).ToBe(10)
+		local Rig = MakeRig({ Reply(429, nil, { ["retry-after"] = "30" }), TokenReply("tok-1"), Reply(200, {}) })
+		Expect(Rig.Client:Send(Requests.Wallet(1001)).Status).ToBe(BackendClient.RetryLater)
+		Expect(#Rig.Slept).ToBe(0)
+		Expect(Rig.Client:Send(Requests.Wallet(1001)).Status).ToBe(200)
+	end)
+
+	It("a stuck exchange is waited on while it is young and replaced once it is stale", function()
+		local Rig, Exchanges = ExchangeRig()
+		local First = Spawn(Rig, Requests.Wallet(1001))
+		Rig.Advance(BackendClient.ExchangeStaleSeconds - 1)
+		local Young = Spawn(Rig, Requests.Wallet(1002))
+		Expect(#Exchanges).ToBe(1)
+		Rig.Advance(1)
+		local Late = Spawn(Rig, Requests.Wallet(1003))
+		Expect(#Exchanges).ToBe(2)
+		assert(coroutine.resume(Exchanges[2], TokenReply("tok-2")))
+		Expect((Late.Result :: Response).Status).ToBe(200)
+		Expect((Young.Result :: Response).Status).ToBe(200)
+		Expect(First.Result).ToBeNil()
+		-- The stuck one finally answers. Its own caller goes ahead, but the newer token stays.
+		assert(coroutine.resume(Exchanges[1], TokenReply("tok-1")))
+		Expect((First.Result :: Response).Status).ToBe(200)
+		Rig.Client:Send(Requests.Wallet(1004))
+		Expect(Rig.Calls[#Rig.Calls].Headers.Authorization).ToBe("Bearer tok-2")
+		Expect(#Exchanges).ToBe(2)
+	end)
+
+	It("the default Resume passes on a waiter's error instead of swallowing it", function()
+		local Rig, Exchanges = ExchangeRig()
+		Spawn(Rig, Requests.Wallet(1001))
+		local Fine = Spawn(Rig, Requests.Wallet(1002))
+		local Broken = coroutine.create(function()
+			Rig.Client:Send(Requests.Wallet(1003))
+			error("waiter blew up")
+		end)
+		assert(coroutine.resume(Broken))
+		local Resumed, Err = coroutine.resume(Exchanges[1], TokenReply("tok-1"))
+		Expect(Resumed).ToBe(false)
+		Expect(string.find(tostring(Err), "waiter blew up", 1, true) ~= nil).ToBe(true)
+		Expect((Fine.Result :: Response).Status).ToBe(200)
+	end)
+end)
+
 return nil

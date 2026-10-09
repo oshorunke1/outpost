@@ -50,7 +50,7 @@ export type SendOptions = {
 	DeadlineSeconds: number?,
 }
 
-type Exchange = { Waiters: { thread } }
+type Exchange = { Waiters: { thread }, StartedAt: number }
 
 type Fields = {
 	Deps: Deps,
@@ -72,6 +72,15 @@ BackendClient.RetryLater = -3
 -- Long enough for two full Retry-After waits, so background calls rarely give up early.
 -- User facing calls such as a purchase should pass a much shorter deadline.
 BackendClient.DefaultDeadlineSeconds = 120
+
+-- The shared token trade gets at most this long, whoever started it, so a thread that waits on it
+-- is never held long. Its retries and Retry-After waits must fit inside this too.
+BackendClient.ExchangeDeadlineSeconds = 10
+
+-- A trade older than this is taken to be stuck, for example a transport that never came back.
+-- The next caller starts a fresh one and takes over its waiters instead of joining it.
+-- It is the trade cap with some slack for one slow transport call.
+BackendClient.ExchangeStaleSeconds = 30
 
 local GroupNames: { Group } = { "Auth", "Economy", "Telemetry", "Flags" }
 BackendClient.Groups = table.freeze(GroupNames)
@@ -158,6 +167,11 @@ local function SendWithRetry(
 	local Deps = self.Deps
 	local Retry = Deps.Retry
 	local Attempt = 1
+	-- A call whose deadline has already passed, for example after waiting on a token, is never sent.
+	-- Nothing went out, so it is safe to try again later with the same key.
+	if Deps.Now() >= Deadline then
+		return Refusal(BackendClient.RetryLater)
+	end
 	local Result = SendOnce(self, Request, Authorization)
 	while Result.Status >= 0 and Retry.ShouldRetry(Deps.Policy, Attempt, Result.Status) do
 		local RetryAfter = Retry.ParseRetryAfter(Result.Headers["retry-after"])
@@ -172,22 +186,41 @@ local function SendWithRetry(
 	return Result
 end
 
--- Does the actual trade of the API key for a token. Only ever runs once at a time.
-local function Trade(self: BackendClient, Deadline: number): (string?, Response?)
+-- Does the actual trade of the API key for a token. Hands back the token and how many seconds it
+-- lasts, or nil and the failure. The caller decides whether to keep the token.
+local function Trade(self: BackendClient, Deadline: number): (string?, Response?, number)
 	local Deps = self.Deps
 	local Request: OutboundRequest = { Method = "POST", Path = ServiceTokenPath, Body = {} }
 	local Result = SendWithRetry(self, Request, Deps.ApiKeyHeader, Deadline)
 	local Body = Result.Body
 	if Result.Status ~= 200 then
-		return nil, Result
+		return nil, Result, 0
 	end
 	if type(Body) ~= "table" or type(Body.accessToken) ~= "string" then
-		return nil, Refusal(0)
+		return nil, Refusal(0), 0
 	end
-	local Lifetime = tonumber(Body.expiresIn) or 0
-	self.Token = Body.accessToken
-	self.TokenExpiresAt = Deps.Now() + math.max(0, Lifetime - RefreshMarginSeconds)
-	return Body.accessToken, nil
+	return Body.accessToken, nil, tonumber(Body.expiresIn) or 0
+end
+
+-- Wakes every waiter with the trade's result. With no Resume passed in, coroutine.resume is used
+-- and the first error a waiter hits is raised again once all of them have been woken, so a bug in
+-- a waiter is never silently lost.
+local function WakeWaiters(self: BackendClient, Waiters: { thread }, Token: string?, Failure: Response?)
+	local Resume = self.Deps.Resume
+	local FirstError: any = nil
+	for _, Waiter in Waiters do
+		if Resume ~= nil then
+			Resume(Waiter, Token, Failure)
+		else
+			local Resumed, Err = coroutine.resume(Waiter, Token, Failure)
+			if not Resumed and FirstError == nil then
+				FirstError = Err
+			end
+		end
+	end
+	if FirstError ~= nil then
+		error(FirstError, 0)
+	end
 end
 
 -- Hands back a token that is good for at least another minute, trading the key if needed.
@@ -198,28 +231,35 @@ local function EnsureToken(self: BackendClient, Deadline: number): (string?, Res
 	if Current ~= nil and self.Deps.Now() < self.TokenExpiresAt then
 		return Current, nil
 	end
+	local Deps = self.Deps
+	local Now = Deps.Now()
 	local Pending = self.Exchanging
-	if Pending ~= nil and coroutine.isyieldable() then
-		table.insert(Pending.Waiters, coroutine.running())
-		return coroutine.yield()
+	local Mine: Exchange = { Waiters = {}, StartedAt = Now }
+	if Pending ~= nil then
+		if Now - Pending.StartedAt < BackendClient.ExchangeStaleSeconds and coroutine.isyieldable() then
+			table.insert(Pending.Waiters, coroutine.running())
+			return coroutine.yield()
+		end
+		-- The pending trade looks stuck, so this one takes over everyone who was waiting on it.
+		Mine.Waiters = Pending.Waiters
+		Pending.Waiters = {}
 	end
-	local Mine: Exchange = { Waiters = {} }
 	self.Exchanging = Mine
-	local Worked, Token, Failure = pcall(Trade, self, Deadline)
+	local TradeDeadline = math.min(Deadline, Now + BackendClient.ExchangeDeadlineSeconds)
+	local Worked, Token, Failure, Lifetime = pcall(Trade, self, TradeDeadline)
 	if not Worked then
-		Token, Failure = nil, Refusal(0)
+		Token, Failure, Lifetime = nil, Refusal(0), 0
 	end
+	-- Only the current trade stores its token. A stuck one that was replaced still hands its token
+	-- to its own caller, but never overwrites the newer one.
 	if self.Exchanging == Mine then
 		self.Exchanging = nil
-	end
-	local Resume = self.Deps.Resume
-	for _, Waiter in Mine.Waiters do
-		if Resume ~= nil then
-			Resume(Waiter, Token, Failure)
-		else
-			coroutine.resume(Waiter, Token, Failure)
+		if Token ~= nil then
+			self.Token = Token
+			self.TokenExpiresAt = Deps.Now() + math.max(0, Lifetime - RefreshMarginSeconds)
 		end
 	end
+	WakeWaiters(self, Mine.Waiters, Token, Failure)
 	return Token, Failure
 end
 
