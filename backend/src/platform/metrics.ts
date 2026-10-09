@@ -6,11 +6,12 @@ import type { ZodApp } from './http.js';
 export interface Metrics {
   registry: Registry;
   httpDuration: Histogram<'method' | 'route' | 'status'>;
-  // outcome is created, replayed, an AppError code (a fixed vocabulary) or error.
+  // outcome is created, replayed, a LEDGER_ERROR_CODES key or other.
   ledgerTransactions: Counter<'kind' | 'outcome'>;
   idempotentReplays: Counter;
   telemetryAccepted: Counter;
-  // reason is clock_skew (outside the accepted window) or disabled (TelemetryEnabled off).
+  // reason is clock_skew (outside the accepted window), disabled (TelemetryEnabled off) or
+  // unavailable (kept events of a batch the stream refused with 503).
   telemetryDropped: Counter<'reason'>;
   // result is applied, duplicate, malformed or dead_letter.
   workerEntries: Counter<'result'>;

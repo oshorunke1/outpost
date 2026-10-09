@@ -78,14 +78,16 @@ export function registerTelemetryRoutes(app: ZodApp, deps: TelemetryRouteDeps): 
         return reply.code(202).send({ accepted: 0, dropped: request.body.events.length });
       }
       const { kept, dropped } = splitByClock(request.body.events, deps.clock.now());
-      deps.metrics.telemetryDropped.inc({ reason: 'clock_skew' }, dropped);
       try {
         if (kept.length > 0) await deps.telemetry.publish(principal.clientId, kept);
       } catch (error) {
+        // Counted once here; the skewed ones are counted by whichever attempt succeeds.
+        deps.metrics.telemetryDropped.inc({ reason: 'unavailable' }, kept.length);
         // The game treats telemetry as fail open and drops the batch; the API just says so.
         throw new AppError(503, 'telemetry_unavailable', 'Telemetry is temporarily unavailable', { cause: error });
       }
       deps.metrics.telemetryAccepted.inc(kept.length);
+      deps.metrics.telemetryDropped.inc({ reason: 'clock_skew' }, dropped);
       return reply.code(202).send({ accepted: kept.length, dropped });
     },
   );

@@ -41,10 +41,14 @@ describe('telemetry counters', () => {
     expect(await counterValue(metrics.telemetryDropped, { reason: 'disabled' })).toBe(2);
   });
 
-  test('a batch the stream refused is not counted as accepted', async () => {
+  // M4: the game drops a 503 batch and may retry it, so the kept events count once as unavailable
+  // and its skewed events are counted only by the attempt that succeeds.
+  test('a batch the stream refused counts its kept events as unavailable and nothing else', async () => {
     const telemetry: TelemetryProducer = { publish: async () => Promise.reject(new Error('redis down')) };
-    const { response, metrics } = await post({ overrides: { telemetry } }, [fresh()]);
+    const { response, metrics } = await post({ overrides: { telemetry } }, [fresh(), fresh(), skewed()]);
     expect(response.statusCode).toBe(503);
     expect(await counterValue(metrics.telemetryAccepted)).toBe(0);
+    expect(await counterValue(metrics.telemetryDropped, { reason: 'unavailable' })).toBe(2);
+    expect(await counterValue(metrics.telemetryDropped, { reason: 'clock_skew' })).toBe(0);
   });
 });
