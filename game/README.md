@@ -53,7 +53,7 @@ The owner runs these by hand in Studio. Nothing here is automated.
 
 ### Data
 
-- [ ] Join in Play Solo. Server output shows `[DataService] using the Mock store Outpost_Players_Mock` and `[DataService] loaded <you> at schema v1 (from v1)`.
+- [ ] Join in Play Solo. Server output shows `[DataService] using the Mock store Outpost_Players_Mock, ledger economy false` and `[DataService] loaded <you> at schema v1 (from v1), Legacy economy`. Studio keeps the M1 Coins in the save unless StudioLedger is on.
 - [ ] Your Player has a `ProfileLoaded` BindableEvent child and the attribute `ProfileLoaded = true`.
 - [ ] Stop the session. Server output shows `[DataService] released <you>` with no errors.
 - [ ] Set the attribute `ForceMockData = true` on ServerStorage in Edit mode, then Play Solo. Output still says the Mock store. Remove the attribute afterwards.
@@ -90,3 +90,19 @@ The owner runs these by hand in Studio. Nothing here is automated.
 - [ ] Only once a backend is deployed. Turn on Allow HTTP Requests in Game Settings, Security, and save, so live servers may use HttpService at all. Without it every request fails and the only sign is a `[RobloxTransport]` warning every 30 seconds.
 - [ ] Only once a backend is deployed. Create the `OutpostApiKey` secret in the Creator Hub, on the experience's Secrets page, with its domain set to the host of `BaseUrl` (for example `outpost.example.com`, no https and no path). Secrets added in Studio's own settings only exist inside Studio, and Studio always uses the mock, so a published server never sees them. Then set Enabled true and BaseUrl, and publish.
 - [ ] On that published server, the server console shows `[Backend] using the Roblox transport`, `EconomyLive()` is true, and a flags call from the server console returns 200. Delete the secret, or set a domain that does not match, and a new server logs that the secret is missing or that the request failed, and stays off the ledger.
+
+### Ledger economy
+
+These need `StudioLedger = true` in `src/ServerStorage/Configs/Backend.luau` with Rojo connected. Set it back to false afterwards. In the commands, `E` is `require(game.ServerStorage.Classes.Services.EconomyService)`, `D` is `require(game.ServerStorage.Classes.Services.DataService)`, `B` is `require(game.ServerStorage.Classes.Util.Backend)`, `R` is `require(game.ReplicatedStorage.Shared.Logic.Backend.Requests)` and `P` is `game.Players:GetPlayers()[1]`, all in the server command bar.
+
+- [ ] Play Solo. Server output shows `[EconomyService] Coins live in the backend ledger on this server` and `loaded <you> at schema v2 (from v2), Ledger economy`. The HUD shows `Coins 0`.
+- [ ] Collect 3 orbs. The HUD goes up by 5 each time straight away. About 30 seconds later `print(B.Client():Send(R.Wallet(P.UserId)).Body.balance)` prints 15, the same as the HUD.
+- [ ] Legacy credit shows in the wallet. Run `D:Update(P, function(S) S.LegacyCoins = 1234 S.LegacyCredited = nil end) E:RunJoinSteps(P)`. Within a few seconds the HUD goes up by 1234, the wallet call prints 1234 more than before, and `print(D:GetData(P).LegacyCredited)` prints `true`.
+- [ ] Rejoin after a crash mid credit. Run `D:Update(P, function(S) S.LegacyCredited = nil end) E:RunJoinSteps(P)`, which is what a server that crashed before the mark landed leaves behind. The HUD and the wallet do not change, because the same `legacy-<UserId>-<n>` keys replay, and `LegacyCredited` is `true` again.
+- [ ] Purchase with the backend down. Collect at least 25 Coins, run `B.MockControls().FailNext(503, "ledger_unavailable", nil, 3)`, then click Buy. The status says `The shop is busy, try again`, the button still offers the hat, and the wallet call shows the same balance as before.
+- [ ] Purchase whose answer was lost after the charge. Run `B.MockControls().FailNext(503, "ledger_unavailable", nil, 2) B.MockControls().LoseNextAnswer()`, then click Buy. The status says `The shop is busy, try again`, but the wallet already dropped by 25. Click Buy again. It says `Bought it!` and the wallet has not dropped a second time, because the second click replays the first charge under the same key.
+- [ ] Two quick clicks. With at least 25 Coins, click Buy twice as fast as you can. One click says `Bought it!` and the other says already owned or unavailable. The wallet drops by 25 once.
+- [ ] Leave with Coins waiting. Collect 1 orb and stop the session within 30 seconds. The server output shows no `[EconomyService]` warning about Coins the backend never confirmed.
+- [ ] Studio default. With `StudioLedger = false`, Play Solo shows `[EconomyService] the ledger economy is off on this server, Coins stay in the save` and the Orbs and Shop checks above behave exactly as in M1.
+- [ ] Only once a backend is deployed. Migration of a v1 save with Coins. On the published test place, join with an account whose M1 test save had Coins. The server console shows `loaded <you> at schema v2 (from v1), Ledger economy`, the HUD shows those Coins after a few seconds, and the backend has `legacy_migration` rows with keys `legacy-<UserId>-1` and up. Rejoin and the balance is the same with no new legacy rows.
+- [ ] Only once a backend is deployed. A save that moved to v2 never goes back. Turn Enabled off and publish, then join with that account. The console shows `Paused economy`, orbs pay nothing, Buy says unavailable, and the save still has no `Coins` field. Turn Enabled back on and the Coins are all there.
