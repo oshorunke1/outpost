@@ -32,7 +32,9 @@ function findStringBuiltSql(source: string): string[] {
   for (const match of source.matchAll(TEMPLATE_VARIABLE)) {
     const name = match[1] ?? '';
     // The variable passed straight in, as { sql: name }, or as the { sql } shorthand when it is called sql.
-    const passed = new RegExp(CALL + String.raw`${name}\b`);
+    // $ is the only identifier character that means something in a regex, so it is escaped. The
+    // lookahead stops a longer name that merely starts with this one (a $ counts as part of a name).
+    const passed = new RegExp(CALL + name.replace(/\$/g, '\\$') + String.raw`(?![\w$])`);
     const shorthand = name === 'sql' && new RegExp(String.raw`\.(?:query|execute)(?:<[^>]*>)?\(\s*\{\s*sql\s*[,}]`).test(source);
     if (passed.test(source) || shorthand) problems.push(`${name} holds a template literal with \${...} and is passed to query or execute`);
   }
@@ -61,6 +63,9 @@ describe('SQL safety', () => {
     expect(findStringBuiltSql(typed)).toHaveLength(1);
     const shorthand = ['const sql = `SELECT ${column} FROM players`;', 'await db.query({ sql, timeout: 500 });'].join('\n');
     expect(findStringBuiltSql(shorthand)).toHaveLength(1);
+    // $ is legal in a JS name, so it must be matched as itself, not as a regex anchor.
+    const dollar = ['const $sql = `SELECT * FROM players WHERE id = ${id}`;', 'await db.query($sql);'].join('\n');
+    expect(findStringBuiltSql(dollar)).toEqual(['$sql holds a template literal with ${...} and is passed to query or execute']);
   });
 
   test('passes placeholder queries, plain template literals and template text that never reaches SQL', () => {
@@ -71,6 +76,9 @@ describe('SQL safety', () => {
       'const message = `player ${id} not found`;',
       'log.warn(message);',
       'await conn.query(migration.sql);',
+      // A safe variable whose name merely starts with a template variable's name.
+      'const statement = `statement for player ${id}`;',
+      'await db.query(statementText, [id]);',
     ].join('\n');
     expect(findStringBuiltSql(safe)).toEqual([]);
   });
