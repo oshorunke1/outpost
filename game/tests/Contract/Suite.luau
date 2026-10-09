@@ -5,7 +5,9 @@
 -- It checks the refusals as well as the happy path, so the mock has to say no where the backend does.
 -- The steps share state and run in order, like one player's visit.
 -- The backend must be fresh for UserId, so the first join finds an empty wallet, and UserId plus 1
--- must never have joined. KeyPrefix must be new for every run against the same database.
+-- must never have joined. UserId plus 2 must be fresh too. It is a second player who buys something,
+-- so a purchase list that is not kept per player fails. KeyPrefix must be new for every run against
+-- the same database.
 local Harness = require("@Tests/Harness")
 local PurchaseFlow = require("@Logic/Backend/PurchaseFlow")
 local Requests = require("@Logic/Backend/Requests")
@@ -31,12 +33,22 @@ function Suite.Run(Label: string, Client: any, UserId: number, KeyPrefix: string
 	local EarnKey = `{KeyPrefix}:earn:1`
 	local HatKey = `{KeyPrefix}:buy:hat`
 	local StrangerId = UserId + 1
+	local OtherId = UserId + 2
 	local FirstEarnId: string? = nil
+	local FirstEarnBody: any = nil
 	local HatTransactionId: string? = nil
+	local HatBody: any = nil
 
 	local function ExpectError(Response: any, Status: number, Code: string)
 		Expect(Response.Status).ToBe(Status)
 		Expect(type(Response.Body) == "table" and Response.Body.error or nil).ToBe(Code)
+	end
+
+	-- What a replay must answer, the first result exactly with only replayed flipped to true.
+	local function AsReplay(First: any): any
+		local Copy = table.clone(First)
+		Copy.replayed = true
+		return Copy
 	end
 
 	local function Balance(): number
@@ -71,6 +83,7 @@ function Suite.Run(Label: string, Client: any, UserId: number, KeyPrefix: string
 			Expect(Response.Body.balanceAfter).ToBe(EarnAmount)
 			Expect(Response.Body.replayed).ToBe(false)
 			FirstEarnId = Response.Body.transactionId
+			FirstEarnBody = Response.Body
 		end)
 
 		It("replaying the same key returns the first result and pays nothing", function()
@@ -79,6 +92,7 @@ function Suite.Run(Label: string, Client: any, UserId: number, KeyPrefix: string
 			Expect(Response.Headers["idempotent-replayed"]).ToBe("true")
 			Expect(Response.Body.replayed).ToBe(true)
 			Expect(Response.Body.transactionId).ToBe(FirstEarnId)
+			Expect(Response.Body).ToEqual(AsReplay(FirstEarnBody))
 			Expect(Balance()).ToBe(EarnAmount)
 		end)
 
@@ -118,6 +132,7 @@ function Suite.Run(Label: string, Client: any, UserId: number, KeyPrefix: string
 			Expect(Response.Body.itemId).ToBe("RedHat")
 			Expect(Decision.BalanceAfter).ToBe(EarnAmount - HatPrice)
 			HatTransactionId = Decision.TransactionId
+			HatBody = Response.Body
 		end)
 
 		It("a purchase retried with the same key replays and charges once", function()
@@ -125,6 +140,7 @@ function Suite.Run(Label: string, Client: any, UserId: number, KeyPrefix: string
 			Expect(Response.Status).ToBe(200)
 			Expect(Decision.Action).ToBe("Grant")
 			Expect(Decision.TransactionId).ToBe(HatTransactionId)
+			Expect(Response.Body).ToEqual(AsReplay(HatBody))
 			Expect(Balance()).ToBe(EarnAmount - HatPrice)
 		end)
 
@@ -150,6 +166,11 @@ function Suite.Run(Label: string, Client: any, UserId: number, KeyPrefix: string
 		end)
 
 		It("an unacknowledged purchase shows up for reconcile until it is fulfilled", function()
+			-- A second player buys too, and their purchase must stay out of this player's list.
+			Expect(Client:Send(Requests.JoinSession(OtherId)).Status).ToBe(200)
+			Expect(Client:Send(Requests.Earn(OtherId, HatPrice, `{KeyPrefix}:earn:other`)).Status).ToBe(201)
+			local OtherBuy = PurchaseFlow.Submit(Client, Requests, OtherId, "RedHat", `{KeyPrefix}:buy:other`)
+			Expect(OtherBuy.Action).ToBe("Grant")
 			local Pending = Client:Send(Requests.Unfulfilled(UserId))
 			Expect(Pending.Status).ToBe(200)
 			Expect(#Pending.Body.purchases).ToBe(1)
@@ -160,12 +181,30 @@ function Suite.Run(Label: string, Client: any, UserId: number, KeyPrefix: string
 			Expect(Client:Send(Requests.Fulfilled(HatTransactionId :: string)).Status).ToBe(204)
 			Expect(Client:Send(Requests.Fulfilled(HatTransactionId :: string)).Status).ToBe(204)
 			Expect(#Client:Send(Requests.Unfulfilled(UserId)).Body.purchases).ToBe(0)
+			local Others = Client:Send(Requests.Unfulfilled(OtherId)).Body.purchases
+			Expect(#Others).ToBe(1)
+			Expect(Others[1].transactionId).ToBe(OtherBuy.TransactionId)
+			Expect(Client:Send(Requests.Fulfilled(OtherBuy.TransactionId :: string)).Status).ToBe(204)
+			Expect(Client:Send(Requests.LeaveSession(OtherId)).Status).ToBe(204)
 		end)
 
 		It("acknowledging an id that is not a uuid is a 400, and an unknown one a 404", function()
 			ExpectError(Raw("POST", "/v1/economy/transactions/----/fulfilled", {}), 400, "invalid_request")
 			ExpectError(Client:Send(Requests.Fulfilled(UnknownTransactionId)), 404, "purchase_not_found")
 			ExpectError(Client:Send(Requests.Fulfilled(FirstEarnId :: string)), 404, "purchase_not_found")
+		end)
+
+		It("after a 1000 earn GoldCrown costs its Configs/Shop price, on the key the 422 left unused", function()
+			local Before = Balance()
+			Expect(Client:Send(Requests.Earn(UserId, 1000, `{KeyPrefix}:earn:2`)).Status).ToBe(201)
+			local Decision, Response =
+				PurchaseFlow.Submit(Client, Requests, UserId, "GoldCrown", `{KeyPrefix}:buy:crown`)
+			Expect(Response.Status).ToBe(201)
+			Expect(Decision.Action).ToBe("Grant")
+			Expect(Response.Body.amount).ToBe(-Shop.GoldCrown.Price)
+			Expect(Decision.BalanceAfter).ToBe(Before + 1000 - Shop.GoldCrown.Price)
+			Expect(Balance()).ToBe(Before + 1000 - Shop.GoldCrown.Price)
+			Expect(Client:Send(Requests.Fulfilled(Decision.TransactionId :: string)).Status).ToBe(204)
 		end)
 
 		It("telemetry takes every event name and every dims value in Configs/Telemetry", function()
@@ -218,6 +257,8 @@ function Suite.Run(Label: string, Client: any, UserId: number, KeyPrefix: string
 		It("leaving ends the session", function()
 			local Response = Client:Send(Requests.LeaveSession(UserId))
 			Expect(Response.Status).ToBe(204)
+			-- BackendClient drops any body on a 204 by itself, so this nil is the client's doing and not
+			-- the server's. The raw answer is only checked by the T31 transport if it ever matters.
 			Expect(Response.Body).ToBeNil()
 		end)
 	end)
