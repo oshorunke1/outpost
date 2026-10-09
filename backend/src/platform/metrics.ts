@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
-import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
+import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from '@prometheus-io/client';
 import type { ZodApp } from './http.js';
 
 export interface Metrics {
