@@ -199,11 +199,15 @@ function EconomyRig.new(Options: { Intercept: ((Request: any) -> any?)? }?)
 		return Keys
 	end
 
-	-- A loaded save for UserId, joined to the backend unless Joined is false.
+	-- A loaded save for UserId, joined to the backend unless Joined is false. A save with no
+	-- LegacyCoins also runs the steps after the join, so purchases are open straight away.
 	function Rig.Player(UserId: number, Save: Save?, Joined: boolean?)
 		Rig.Saves[UserId] = Save or { OwnedItems = {} }
 		if Joined ~= false then
 			assert(Core:Join(UserId), "the join should land")
+			if Rig.Saves[UserId].LegacyCoins == nil then
+				assert(Core:AfterJoin(UserId), "the steps after the join should settle")
+			end
 		end
 	end
 

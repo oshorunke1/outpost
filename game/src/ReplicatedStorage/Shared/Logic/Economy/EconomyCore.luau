@@ -9,7 +9,8 @@
 -- batcher with the same key. A batch only ever lives in one place, the batcher, the held list or
 -- one send, and every key is unique, so a batch can never be paid twice.
 --
--- Buying. Only one purchase, reconcile or legacy credit runs per player at a time, see PurchaseGuard.
+-- Buying. Only one purchase, reconcile or legacy credit runs per player at a time, see PurchaseGuard,
+-- and no purchase runs before the join reconcile has finished.
 -- A purchase sends the player's unsent Coins first, then buys with the key PurchaseGuard keeps for
 -- that item until a definite answer, all inside one 10 second deadline. A Grant writes the item into
 -- the save and then acknowledges it. If the write fails the purchase stays unacknowledged, and the
@@ -365,9 +366,12 @@ local function Buy(self: EconomyCore, UserId: number, ItemId: string): Decision
 end
 
 -- Buys an item through the ledger and yields while it does. A player whose join has not landed,
--- or who already has something running, gets RetryLater and nothing is sent.
+-- whose join reconcile has not finished, or who already has something running, gets RetryLater
+-- and nothing is sent. Waiting for the reconcile matters. An item a crashed server charged for is
+-- not in the save until the reconcile grants it, so buying it before then would charge twice.
 function EconomyCore.Purchase(self: EconomyCore, UserId: number, ItemId: string): Decision
-	if not self.Joined[UserId] then
+	local Progress = self.Progress[UserId]
+	if not self.Joined[UserId] or Progress == nil or not Progress.Reconciled then
 		return RetryLater()
 	end
 	local Ran, Result = WithLock(self, UserId, function()
