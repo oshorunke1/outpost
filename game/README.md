@@ -33,7 +33,7 @@ Connect the Rojo plugin in Studio to see the game. No backend and no Docker are 
 | `src/ReplicatedStorage/Shared/Net/Packets.luau` | The one list of every remote |
 | `src/ServerStorage/Classes/Services` | Server singletons with `Init` and `Start` |
 | `src/ReplicatedStorage/Classes/Controllers` | Client singletons with `Init` and `Start` |
-| `src/ServerStorage/Classes/Util` | Server helpers such as NetGuard |
+| `src/ServerStorage/Classes/Util` | Server helpers such as NetGuard, RobloxTransport and the shared Backend client |
 | `src/ServerStorage/Configs` | Server only settings, such as where the backend lives. Players never receive these |
 | `vendor/` | Third-party code, never edited |
 
@@ -75,3 +75,12 @@ The owner runs these by hand in Studio. Nothing here is automated.
 - [ ] Click Buy again. The status says `You already own that` and Coins stay the same.
 - [ ] From the client command bar, fire `game.ReplicatedStorage.Remotes["Shop.Buy"]:FireServer({ ItemId = "RedHat", Price = 0 })`. Server output shows one `dropped Shop.Buy ... reason BadPayload` line and nothing is bought.
 - [ ] Fire `Shop.Buy` 30 times in a loop from the client command bar. Server output shows `reason Throttled` at most once per 5 seconds, and at most one purchase happens.
+
+### Backend client
+
+- [ ] Play Solo. In the server command bar run `print(require(game.ServerStorage.Classes.Util.Backend).Mode())`. Output shows `[Backend] using the Mock transport` once, then `Mock`. Run it again and the `using` line does not repeat.
+- [ ] In the server command bar run `local R = require(game.ServerStorage.Classes.Util.Backend).Client():Send({ Method = "GET", Path = "/v1/flags" }) print(R.Status, R.Body.flags.ShopEnabled)`. Output shows `200 true`.
+- [ ] Run `require(game.ServerStorage.Classes.Util.Backend).MockControls().FailNext(503, "flags_unavailable")`, then the flags call again. It comes back 200 after a short retry, because one 503 is retried.
+- [ ] In the client command bar run `print(game.ServerStorage:FindFirstChild("Configs"))`. Output shows `nil`, so players never see the backend settings.
+- [ ] On a published server with `Configs/Backend` Enabled false, the first backend call logs `[Backend] using the Offline transport` and nothing is sent. Check the server console in the Developer Console.
+- [ ] Only once a backend is deployed. Add the `OutpostApiKey` secret under Game Settings, Security, set Enabled true and BaseUrl, and publish. The server logs `[Backend] using the Roblox transport` and a flags call returns 200. With the secret removed it logs that the secret is missing and uses Offline.
