@@ -1,5 +1,6 @@
 --!strict
 local Harness = require("@Tests/Harness")
+local BackendClient = require("@Logic/Backend/BackendClient")
 local BackendMode = require("@Logic/Backend/BackendMode")
 
 local Describe = Harness.Describe
@@ -54,10 +55,12 @@ Describe("BackendMode.Pick", function()
 end)
 
 Describe("BackendMode.Offline", function()
-	It("answers every request with Status 0 and a fresh table", function()
+	It("answers every request at once with the Offline refusal and a fresh table", function()
 		local First = BackendMode.Offline({ Method = "GET", Url = "https://x.test/v1/flags", Headers = {} })
 		Expect(First.Ok).ToBe(false)
-		Expect(First.Status).ToBe(0)
+		-- A refusal below zero, so BackendClient neither retries it nor counts it against a breaker.
+		Expect(First.Status).ToBe(BackendClient.Offline)
+		Expect(BackendMode.OfflineStatus).ToBe(BackendClient.Offline)
 		Expect(First.Body).ToBeNil()
 		First.Headers.x = "y"
 		local Second = BackendMode.Offline({ Method = "GET", Url = "https://x.test/v1/flags", Headers = {} })

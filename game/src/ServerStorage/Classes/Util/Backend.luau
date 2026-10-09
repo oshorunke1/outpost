@@ -4,7 +4,7 @@
 -- Studio uses MockTransport, so the game always runs there.
 -- A live server uses RobloxTransport only when Configs/Backend is turned on and the API key is in
 -- the Secrets Store. The key is sent as an ApiKey header and never appears in code or the place.
--- Any other live server is Offline. It sends nothing and every call answers Status 0.
+-- Any other live server is Offline. It sends nothing and every call is refused at once.
 -- Enabled is the cut over switch for the economy. While it is false the game keeps its old
 -- DataStore Coins, so a live server never keeps Coins in the mock's memory.
 local HttpService = game:GetService("HttpService")
