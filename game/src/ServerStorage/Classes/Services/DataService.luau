@@ -13,6 +13,7 @@ local RunService = game:GetService("RunService")
 local ServerStorage = game:GetService("ServerStorage")
 
 local Shared = ReplicatedStorage.Shared
+local CoinsDisplay = require(Shared.Logic.Economy.CoinsDisplay)
 local BackendMode = require(Shared.Logic.Backend.BackendMode)
 local Migrations = require(Shared.Logic.Data.Migrations)
 local Migrator = require(Shared.Logic.Data.Migrator)
@@ -45,9 +46,10 @@ local Economies: { [Player]: SaveGate.Economy } = {}
 local EconomyLive = false
 
 -- Coins live in the backend ledger from M2 on. EconomyService tells DataService where to read them
--- for the snapshot, so DataService never has to require EconomyService.
-local CoinsSource: (Player: Player) -> number = function(_Player: Player)
-	return 0
+-- for the snapshot, so DataService never has to require EconomyService. The second value is true
+-- once the ledger balance is real, that is once the player's join landed.
+local CoinsSource: (Player: Player) -> (number, boolean) = function(_Player: Player)
+	return 0, false
 end
 
 local function OnPlayerAdded(Player: Player)
@@ -177,7 +179,7 @@ function DataService:EconomyFor(Player: Player): SaveGate.Economy?
 	return Economies[Player]
 end
 
-function DataService:SetCoinsSource(Source: (Player: Player) -> number)
+function DataService:SetCoinsSource(Source: (Player: Player) -> (number, boolean))
 	CoinsSource = Source
 end
 
@@ -226,12 +228,9 @@ function DataService:PushSnapshot(Player: Player)
 	end
 	table.sort(Owned)
 	-- A Legacy player still has Coins in the save. Everyone else reads them from the ledger cache.
-	local Coins = if Economies[Player] == "Legacy" then Data.Coins or 0 else CoinsSource(Player)
-	Coins = math.floor(Coins)
-	if Coins ~= Coins then
-		Coins = 0
-	end
-	NetGuard.SendTo(Player, "Profile.Snapshot", { Coins = math.clamp(Coins, 0, 1000000000), OwnedItems = Owned })
+	local LedgerCoins, LedgerReady = CoinsSource(Player)
+	local Coins, State = CoinsDisplay.For(Economies[Player], Data.Coins, LedgerCoins, LedgerReady)
+	NetGuard.SendTo(Player, "Profile.Snapshot", { Coins = Coins, State = State, OwnedItems = Owned })
 end
 
 return DataService

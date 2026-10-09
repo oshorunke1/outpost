@@ -281,7 +281,8 @@ function EconomyService:Init()
 		end,
 	})
 	DataService:SetCoinsSource(function(Player: Player)
-		return EconomyService:GetBalance(Player)
+		local Running = Core
+		return EconomyService:GetBalance(Player), Running ~= nil and Running:IsJoined(Player.UserId)
 	end)
 	Players.PlayerAdded:Connect(WhenProfileLoaded)
 	Players.PlayerRemoving:Connect(OnPlayerRemoving)

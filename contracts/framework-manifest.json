@@ -5,7 +5,7 @@
       "hasInit": true,
       "hasStart": false,
       "kind": "service",
-      "lineCount": 237,
+      "lineCount": 236,
       "listens": [
         "Profile.RequestSnapshot"
       ],
@@ -16,7 +16,7 @@
       "hasInit": true,
       "hasStart": true,
       "kind": "service",
-      "lineCount": 306,
+      "lineCount": 307,
       "listens": [],
       "name": "EconomyService",
       "path": "game/src/ServerStorage/Classes/Services/EconomyService.luau"
@@ -25,7 +25,7 @@
       "hasInit": false,
       "hasStart": true,
       "kind": "controller",
-      "lineCount": 66,
+      "lineCount": 67,
       "listens": [],
       "name": "HudController",
       "path": "game/src/ReplicatedStorage/Classes/Controllers/HudController.luau"
@@ -84,7 +84,7 @@
     {
       "direction": "ServerToClient",
       "name": "Profile.Snapshot",
-      "payload": "{ Coins: integer 0..1000000000, OwnedItems: list of enum ItemId, up to 64 }",
+      "payload": "{ Coins: integer 0..1000000000, OwnedItems: list of enum ItemId, up to 64, State: string up to 16 bytes }",
       "rateLimit": null
     },
     {
