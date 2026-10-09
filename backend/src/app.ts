@@ -21,8 +21,12 @@ import { registerTelemetryRoutes } from './modules/telemetry/routes.js';
 import type { Clock } from './platform/clock.js';
 import type { AppConfig } from './platform/config.js';
 import { registerErrorHandler } from './platform/errors.js';
+import { registerHealthRoutes } from './platform/health.js';
+import type { HealthChecks } from './platform/health.js';
 import type { ZodApp } from './platform/http.js';
 import { loggerOptions } from './platform/logger.js';
+import { registerHttpMetrics } from './platform/metrics.js';
+import type { Metrics } from './platform/metrics.js';
 
 // Everything the routes need. compose.ts fills it with MySQL and Redis, memoryDeps.ts with fakes.
 export interface AppDeps {
@@ -36,6 +40,8 @@ export interface AppDeps {
   clock: Clock;
   telemetry: TelemetryProducer;
   flags: FlagsService;
+  metrics: Metrics;
+  health: HealthChecks;
 }
 
 export interface BuildOptions {
@@ -59,6 +65,7 @@ export async function buildApp(deps: AppDeps, options: BuildOptions = {}): Promi
   app.setSerializerCompiler(serializerCompiler);
   app.decorateRequest('principal', null);
   registerErrorHandler(app);
+  registerHttpMetrics(app, deps.metrics);
 
   // One bucket per group. Telemetry's is per instance like apiLimiter, sized from TELEMETRY_API_LIMIT.
   const limiters: Record<ApiGroup, TokenBucketLimiter> = {
@@ -66,6 +73,7 @@ export async function buildApp(deps: AppDeps, options: BuildOptions = {}): Promi
     telemetry: new TokenBucketLimiter({ ...deps.config.telemetryApiLimit, clock: deps.clock }),
   };
   const guardFor: GuardFor = (scope, group = 'default') => serviceGuard(deps.serviceTokens, limiters[group], scope, group);
+  registerHealthRoutes(app, deps.health);
   registerIdentityRoutes(app, deps);
   registerPlayerRoutes(app, { players: deps.players, guardFor });
   registerEconomyRoutes(app, { ledger: deps.ledger, guardFor });

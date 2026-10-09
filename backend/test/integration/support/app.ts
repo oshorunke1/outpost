@@ -10,6 +10,7 @@ import { OPERATOR_SCOPES } from '../../../src/modules/identity/scopes.js';
 import { systemClock } from '../../../src/platform/clock.js';
 import type { Db } from '../../../src/platform/db.js';
 import type { ZodApp } from '../../../src/platform/http.js';
+import { createMetrics } from '../../../src/platform/metrics.js';
 import type { Redis } from '../../../src/platform/redis.js';
 import type { IntegrationContext } from './context.js';
 
@@ -20,7 +21,7 @@ export async function createIntegrationApp(
 ): Promise<{ app: ZodApp; deps: AppDeps }> {
   const deps = await createAppDeps(
     { ...MEMORY_CONFIG, databaseUrl: ctx.databaseUrl },
-    { db: overrides.db ?? ctx.db, redis: overrides.redis ?? ctx.redis, clock: systemClock },
+    { db: overrides.db ?? ctx.db, redis: overrides.redis ?? ctx.redis, clock: systemClock, metrics: createMetrics() },
     { argon2: FAST_ARGON2, ...(overrides.logger ? { logger: overrides.logger } : {}) },
   );
   return { app: await buildApp(deps), deps };

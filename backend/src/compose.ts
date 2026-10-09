@@ -27,13 +27,16 @@ import { createRedisTelemetryProducer } from './modules/telemetry/producer.js';
 import type { Clock } from './platform/clock.js';
 import type { AppConfig } from './platform/config.js';
 import type { Db, TransactionLogger } from './platform/db.js';
+import { createHealthChecks } from './platform/health.js';
 import { loggerOptions } from './platform/logger.js';
+import type { Metrics } from './platform/metrics.js';
 import type { Redis } from './platform/redis.js';
 
 export interface Infra {
   db: Db;
   redis: Redis;
   clock: Clock;
+  metrics: Metrics; // one registry per process, shared with the metrics server and the worker
 }
 
 export interface ComposeOptions {
@@ -57,7 +60,7 @@ export async function loadSigningKey(config: AppConfig): Promise<SigningKey> {
 }
 
 export async function createAppDeps(config: AppConfig, infra: Infra, options: ComposeOptions = {}): Promise<AppDeps> {
-  const { db, redis, clock } = infra;
+  const { db, redis, clock, metrics } = infra;
   const hasher = createArgon2Hasher(options.argon2 ?? PRODUCTION_ARGON2);
   const tokens = createTokenService(await loadSigningKey(config), { issuer: config.jwtIssuer, now: () => clock.now() });
   const stores = createRedisIdentityStores(redis);
@@ -109,5 +112,8 @@ export async function createAppDeps(config: AppConfig, infra: Infra, options: Co
     clock,
     telemetry: createRedisTelemetryProducer(redis),
     flags: createMysqlFlagsService(db, clock, { logger: options.logger ?? baseLogger.child({ module: 'flags' }) }),
+    metrics,
+    // Each probe is bounded at a second, so a hung pool or a Redis that never answers is a fail, not a hang.
+    health: createHealthChecks({ mysql: () => db.query('SELECT 1'), redis: () => redis.ping() }),
   };
 }

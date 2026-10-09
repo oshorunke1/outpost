@@ -30,6 +30,8 @@ import { systemClock } from './platform/clock.js';
 import type { Clock } from './platform/clock.js';
 import type { AppConfig } from './platform/config.js';
 import { AppError } from './platform/errors.js';
+import { createHealthChecks } from './platform/health.js';
+import { createMetrics } from './platform/metrics.js';
 
 // The whole app wired to in-memory fakes: unit tests and the OpenAPI export use this.
 // It never touches a network and is never used to serve real traffic.
@@ -132,6 +134,8 @@ export async function createMemoryAppDeps(options: MemoryOptions = {}): Promise<
       clock,
       telemetry,
       flags: createMemoryFlagsService(),
+      metrics: createMetrics(),
+      health: createHealthChecks({}), // nothing to probe: memory deps are always ready
       ...options.overrides,
     },
     clock,
