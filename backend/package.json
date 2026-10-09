@@ -9,8 +9,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx watch src/server.ts",
-    "start": "node --import @opentelemetry/auto-instrumentations-node/register dist/server.js",
-    "start:worker": "node --import @opentelemetry/auto-instrumentations-node/register dist/worker.js",
+    "start": "node --import ./dist/signals.js --import @opentelemetry/auto-instrumentations-node/register dist/server.js",
+    "start:worker": "node --import ./dist/signals.js --import @opentelemetry/auto-instrumentations-node/register dist/worker.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test:unit": "vitest run --config vitest.config.ts",

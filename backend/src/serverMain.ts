@@ -1,4 +1,4 @@
-// The API entry point: `node dist/server.js` (npm start adds OpenTelemetry with --import).
+// The API process, started by server.ts once its signal hook is in.
 // The API listens on PORT and Prometheus metrics on METRICS_HOST:METRICS_PORT.
 import { pino } from 'pino';
 import { buildApp } from './app.js';
@@ -11,7 +11,7 @@ import {
   armShutdownDeadline,
   createStartup,
   exitWhenDrained,
-  onShutdownSignal,
+  onStop,
   serverShutdownSteps,
   shutdownInOrder,
 } from './platform/lifecycle.js';
@@ -19,22 +19,19 @@ import { loggerOptions } from './platform/logger.js';
 import { createMetrics, startMetricsServer } from './platform/metrics.js';
 import { connectRedis } from './platform/redis.js';
 
-async function main(): Promise<void> {
+export async function runServer(stopSignal: AbortSignal): Promise<void> {
   const config = loadConfig(process.env);
   // One logger for everything outside a request: the ledger, the flags service and readiness.
   const log = pino(loggerOptions(config.logLevel));
 
-  // The signal hook goes in before any startup work, so a stop during startup is never lost.
-  const stop = new AbortController();
   let shutdown: (() => Promise<number>) | null = null; // set once everything is up
-  onShutdownSignal(async (signal) => {
-    log.info({ signal }, 'shutting down');
+  onStop(stopSignal, async () => {
+    log.info({ signal: String(stopSignal.reason) }, 'shutting down');
     armShutdownDeadline(log);
-    stop.abort();
     if (shutdown) exitWhenDrained(await shutdown());
   });
 
-  const startup = createStartup(stop.signal);
+  const startup = createStartup(stopSignal);
   try {
     const db = await startup.open(
       'mysql pool',
@@ -69,9 +66,3 @@ async function main(): Promise<void> {
     exitWhenDrained(await shutdownInOrder(startup.closeSteps(), log));
   }
 }
-
-main().catch((error: unknown) => {
-  // ConfigError, pingDb and connectRedis messages name what failed but never print a URL or secret.
-  console.error(error);
-  process.exit(1);
-});

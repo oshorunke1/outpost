@@ -29,4 +29,4 @@ WORKDIR /repo/backend
 # The files stay owned by root, so the app user can read them but never change them.
 USER node
 EXPOSE 3000 9464
-CMD ["node", "--import", "@opentelemetry/auto-instrumentations-node/register", "dist/server.js"]
+CMD ["node", "--import", "./dist/signals.js", "--import", "@opentelemetry/auto-instrumentations-node/register", "dist/server.js"]

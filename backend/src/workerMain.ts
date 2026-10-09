@@ -1,4 +1,4 @@
-// The telemetry worker entry point: `node dist/worker.js` (npm run start:worker adds OpenTelemetry).
+// The telemetry worker process, started by worker.ts once its signal hook is in.
 // It rolls the Redis stream up into MySQL and serves Prometheus metrics on METRICS_HOST:METRICS_PORT.
 import { hostname } from 'node:os';
 import { pino } from 'pino';
@@ -12,7 +12,7 @@ import {
   armShutdownDeadline,
   createStartup,
   exitWhenDrained,
-  onShutdownSignal,
+  onStop,
   shutdownInOrder,
   workerShutdownSteps,
 } from './platform/lifecycle.js';
@@ -22,19 +22,17 @@ import { connectRedis } from './platform/redis.js';
 
 const PRUNE_BATCH_SIZE = 10_000;
 
-async function main(): Promise<void> {
+export async function runWorker(stopSignal: AbortSignal): Promise<void> {
   const config = loadConfig(process.env);
   const log = pino({ ...loggerOptions(config.logLevel), base: { service: 'outpost-worker' } });
 
-  // Installed before any startup work. The loop below sees the abort and stops after its batch.
-  const stop = new AbortController();
-  onShutdownSignal((signal) => {
-    log.info({ signal }, 'stopping after the current batch');
+  // The loop below sees the same abort and stops after its batch.
+  onStop(stopSignal, () => {
+    log.info({ signal: String(stopSignal.reason) }, 'stopping after the current batch');
     armShutdownDeadline(log);
-    stop.abort();
   });
 
-  const startup = createStartup(stop.signal);
+  const startup = createStartup(stopSignal);
   try {
     const db = await startup.open(
       'mysql pool',
@@ -68,7 +66,7 @@ async function main(): Promise<void> {
     );
 
     log.info({ consumer }, 'telemetry worker started');
-    await runWorkerLoop({ worker, logger: log, clock: systemClock, signal: stop.signal, pruneBatchSize: PRUNE_BATCH_SIZE });
+    await runWorkerLoop({ worker, logger: log, clock: systemClock, signal: stopSignal, pruneBatchSize: PRUNE_BATCH_SIZE });
     exitWhenDrained(await shutdownInOrder(workerShutdownSteps({ metricsServer, redis, db }), log));
   } catch (error) {
     if (!(error instanceof StartupAborted)) throw error;
@@ -76,8 +74,3 @@ async function main(): Promise<void> {
     exitWhenDrained(await shutdownInOrder(startup.closeSteps(), log));
   }
 }
-
-main().catch((error: unknown) => {
-  console.error(error);
-  process.exit(1);
-});
