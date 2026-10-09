@@ -139,7 +139,7 @@ describe('economy over HTTP on MySQL', () => {
   test('a lost COMMIT is 503 ledger_unavailable with retry-after, and the composition root logs it', async () => {
     await join(1005);
     const logged: string[] = [];
-    const logger = { error: (_details: object, message: string) => void logged.push(message) };
+    const logger = { error: (_details: object, message: string) => void logged.push(message), warn: () => undefined };
     const flaky = await createIntegrationApp(ctx, { db: failingCommitDb(ctx.db, 'before-apply'), logger });
     try {
       const response = await transact('lost-commit-1', { kind: 'earn', userId: 1005, amount: 7, reason: 'orbs' }, flaky.app, bearer(await gameToken(flaky.deps.tokens)));

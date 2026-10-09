@@ -40,10 +40,12 @@ export interface ComposeOptions {
   argon2?: Argon2Params; // integration tests pass FAST_ARGON2; everything else gets PRODUCTION_ARGON2
   // Where the ledger reports a lost COMMIT or a failed rollback. Defaults to a logger with the
   // app's level, redaction and service name on stdout; tests pass one they can read.
-  logger?: TransactionLogger;
-  // Where the flags service warns about a failed reload or a bad stored value. Same default as logger.
-  flagsLogger?: FlagsLogger;
+  // The same logger also gets the flags service's warnings (a failed reload, a bad stored value).
+  logger?: ComposeLogger;
 }
+
+// The one logger hook compose takes: the ledger needs error, the flags service needs warn.
+export type ComposeLogger = TransactionLogger & FlagsLogger;
 
 // Production loads the PEM from JWT_PRIVATE_KEY_PEM (loadConfig already insists on it, and this
 // checks again). Development and tests get a fresh key per process that only ever lives in memory,
@@ -106,6 +108,6 @@ export async function createAppDeps(config: AppConfig, infra: Infra, options: Co
     ledger,
     clock,
     telemetry: createRedisTelemetryProducer(redis),
-    flags: createMysqlFlagsService(db, clock, { logger: options.flagsLogger ?? baseLogger.child({ module: 'flags' }) }),
+    flags: createMysqlFlagsService(db, clock, { logger: options.logger ?? baseLogger.child({ module: 'flags' }) }),
   };
 }

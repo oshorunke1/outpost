@@ -171,4 +171,17 @@ describe('flags on MySQL', () => {
       await app.close();
     }
   });
+
+  test('the composed app reports flag warnings to the one logger compose was given', async () => {
+    await ctx.db.query("UPDATE flags SET flag_value = CAST('null' AS JSON) WHERE flag_key = 'ShopEnabled'");
+    const warned: string[] = [];
+    const logger = { warn: (_details: object, message: string) => void warned.push(message), error: () => undefined };
+    const { app, deps } = await createIntegrationApp(ctx, { logger });
+    try {
+      await expect(deps.flags.list()).resolves.toEqual(FLAG_DEFAULTS);
+    } finally {
+      await app.close();
+    }
+    expect(warned).toEqual(['flag value is not a boolean, number or string; using the default']);
+  });
 });
