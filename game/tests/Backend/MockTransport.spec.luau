@@ -223,6 +223,18 @@ Describe("MockTransport earn", function()
 		Expect(Rig.Call("GET", "/v1/players/1001/wallet").Body.balance).ToBe(1001)
 	end)
 
+	It("a legacy_migration earn pays like orbs and replays under its key", function()
+		local Rig = Joined(1001)
+		local First = Earn(Rig, 1001, 1000, "legacy-1001-1", { reason = "legacy_migration" })
+		Expect(First.Status).ToBe(201)
+		Expect(First.Body.balanceAfter).ToBe(1000)
+		local Again = Earn(Rig, 1001, 1000, "legacy-1001-1", { reason = "legacy_migration" })
+		Expect(Again.Status).ToBe(200)
+		Expect(Again.Body.balanceAfter).ToBe(1000)
+		-- The same key as an orbs earn is a different request, so it is a 409.
+		ExpectError(Earn(Rig, 1001, 1000, "legacy-1001-1"), 409, "idempotency_key_reuse")
+	end)
+
 	It("a body with an unknown reason, a missing field or an extra field is a 400", function()
 		local Rig = Joined(1001)
 		ExpectError(Earn(Rig, 1001, 5, "spec:earn:r", { reason = "bonus" }), 400, "invalid_request")

@@ -25,6 +25,27 @@ Describe("Requests", function()
 		Expect(Request.Body).ToEqual({ kind = "earn", userId = 1001, amount = 35, reason = "orbs" })
 	end)
 
+	It("a legacy credit is an earn with the legacy_migration reason under a fixed key", function()
+		local Request = Requests.LegacyCredit(1001, 1000, 1)
+		Expect(Request.Path).ToBe("/v1/economy/transactions")
+		Expect((Request.Headers :: any)["Idempotency-Key"]).ToBe("legacy-1001-1")
+		Expect(Request.Body).ToEqual({ kind = "earn", userId = 1001, amount = 1000, reason = "legacy_migration" })
+		Expect(Requests.LegacyKey(9007199254740991, 12)).ToBe("legacy-9007199254740991-12")
+		-- The shortest UserId still gives a key the backend's 8 character rule accepts.
+		Expect(Requests.IsIdempotencyKey(Requests.LegacyKey(1, 1))).ToBe(true)
+	end)
+
+	It("a legacy key refuses a bad UserId or chunk number instead of colliding with another", function()
+		for _, Bad in { 0, -1, 1.5, NaN, math.huge } do
+			Expect(function()
+				Requests.LegacyKey(Bad, 1)
+			end).ToThrow("UserId")
+			Expect(function()
+				Requests.LegacyKey(1001, Bad)
+			end).ToThrow("chunk")
+		end
+	end)
+
 	It("a purchase names only the item", function()
 		Expect(Requests.Purchase(1001, "RedHat", "key-12345").Body).ToEqual({
 			kind = "purchase",

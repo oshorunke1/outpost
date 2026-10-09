@@ -58,7 +58,7 @@ local MockTransport = {}
 
 -- MAX_EARN_PER_TRANSACTION and EARN_REASONS in backend/src/modules/economy/plan.ts.
 MockTransport.MaxEarn = 1000
-MockTransport.EarnReasons = table.freeze({ "orbs" })
+MockTransport.EarnReasons = table.freeze({ "orbs", "legacy_migration" })
 -- MAX_FUTURE_SKEW_MS and MAX_EVENT_AGE_MS in backend/src/modules/telemetry/schema.ts.
 MockTransport.MaxFutureSkewMs = 5 * 60000
 MockTransport.MaxEventAgeMs = 24 * 60 * 60000

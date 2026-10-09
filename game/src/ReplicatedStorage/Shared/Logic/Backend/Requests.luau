@@ -111,6 +111,26 @@ function Requests.Earn(UserId: number, Coins: number, Key: string): Request
 	}
 end
 
+-- The key for chunk Index of a player's one-time legacy credit. It never changes, so a server
+-- that crashed halfway sends the same keys again and the backend replays them instead of paying twice.
+function Requests.LegacyKey(UserId: number, Index: number): string
+	local Id = IdText(UserId)
+	if not IsWholeInRange(Index, 1, MaxSafeInteger) then
+		error(`the legacy chunk number must be a whole number from 1 up, got {Index}`, 2)
+	end
+	return `legacy-{Id}-{string.format("%d", Index)}`
+end
+
+-- One chunk of the Coins a player saved before the ledger existed, paid with the legacy_migration reason.
+function Requests.LegacyCredit(UserId: number, Coins: number, Index: number): Request
+	return {
+		Method = "POST",
+		Path = "/v1/economy/transactions",
+		Headers = { ["Idempotency-Key"] = Requests.LegacyKey(UserId, Index) },
+		Body = { kind = "earn", userId = CheckUserId(UserId), amount = Coins, reason = "legacy_migration" },
+	}
+end
+
 function Requests.Purchase(UserId: number, ItemId: string, Key: string): Request
 	return {
 		Method = "POST",
