@@ -9,6 +9,20 @@
 -- Nothing here touches game. The catalog, flags, telemetry allow lists and clock are passed in.
 -- The second thing new hands back is a set of Controls, so a spec or a Studio tester can make the
 -- next call fail, lose an answer, flip a flag or throw away every token.
+--
+-- What the mock does not model, so a Studio test can't rely on it.
+-- There is one service client. The real backend only lets the client that made a purchase
+-- acknowledge it, and hashes the client into every key, so another client reusing a key is a 409.
+-- There are no scopes, so it never answers 403 insufficient_scope.
+-- The token trade never fails. Any ApiKey string works, and FailNext skips the trade, so an auth
+-- outage (a bad key, or a 429 or 503 on the trade) can't be tried out here.
+-- There is no real rate limiter (FailNext is the only 429) and no byte limits, so no 413.
+-- It gets Lua tables, not JSON. Something that encodes differently on the wire, like a NaN or a
+-- table with mixed keys, can pass here and fail live. Empty dims are the one case it refuses.
+-- The purchase list keeps insertion order with no cap of 100 and no refunds. The real one orders
+-- by time and then a random id, so two purchases in the same millisecond may come back swapped.
+-- TelemetryEnabled takes effect at once, where the real route reads flags through a 5 second cache.
+-- FailNext answers before the body is checked, where a real 503 only comes after it.
 
 export type Response = { Ok: boolean, Status: number, Body: any, Headers: { [string]: string } }
 export type TransportRequest = { Method: string, Url: string, Headers: { [string]: any }, Body: any? }
