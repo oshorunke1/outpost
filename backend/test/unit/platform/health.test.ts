@@ -1,12 +1,31 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { buildApp } from '../../../src/app.js';
 import { createMemoryAppDeps } from '../../../src/memoryDeps.js';
-import { READY_CACHE_MS, createHealthChecks } from '../../../src/platform/health.js';
+import { PROBE_TIMEOUT_MS, READY_CACHE_MS, createHealthChecks } from '../../../src/platform/health.js';
 import { createFakeClock } from '../../support/clock.js';
 
 const appWith = async (health: ReturnType<typeof createHealthChecks>) => buildApp((await createMemoryAppDeps({ overrides: { health } })).deps);
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('health', () => {
+  // I1: compose relies on the default, so a blackholed MySQL or Redis is a clean 503 within a second.
+  test('a probe that never answers fails at PROBE_TIMEOUT_MS by default, not before', async () => {
+    vi.useFakeTimers();
+    expect(PROBE_TIMEOUT_MS).toBe(1_000);
+    const health = createHealthChecks({ slow: () => new Promise(() => undefined) });
+    let report: unknown;
+    void health.ready().then((value) => {
+      report = value;
+    });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(report).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(report).toEqual({ ok: false, draining: false, checks: { slow: 'fail' } });
+  });
+
   test('readyz is 200 when every probe passes', async () => {
     const health = createHealthChecks({ mysql: async () => 1, redis: async () => 'PONG' });
     const app = await appWith(health);

@@ -17,7 +17,7 @@ export interface HealthChecks {
 }
 
 export interface HealthOptions {
-  timeoutMs?: number; // a probe slower than this counts as a fail (default 1000)
+  timeoutMs?: number; // a probe slower than this counts as a fail (default PROBE_TIMEOUT_MS)
   cacheMs?: number; // how long one report answers every readiness call (default READY_CACHE_MS)
   clock?: Clock;
 }
@@ -25,6 +25,10 @@ export interface HealthOptions {
 // A burst of readiness probes (several load balancers, a busy orchestrator) costs one MySQL and
 // one Redis round trip per window instead of one per request.
 export const READY_CACHE_MS = 1_000;
+
+// A probe that has not answered by then is a fail, so a blackholed MySQL or Redis is a quick 503
+// instead of a request that hangs until the load balancer gives up.
+export const PROBE_TIMEOUT_MS = 1_000;
 
 async function withTimeout<T>(work: () => Promise<T>, ms: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -42,7 +46,7 @@ async function withTimeout<T>(work: () => Promise<T>, ms: number): Promise<T> {
 }
 
 export function createHealthChecks(probes: Record<string, () => Promise<unknown>>, options: HealthOptions = {}): HealthChecks {
-  const timeoutMs = options.timeoutMs ?? 1_000;
+  const timeoutMs = options.timeoutMs ?? PROBE_TIMEOUT_MS;
   const cacheMs = options.cacheMs ?? READY_CACHE_MS;
   const clock = options.clock ?? systemClock;
   let draining = false;
