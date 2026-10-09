@@ -87,6 +87,31 @@ export function onShutdownSignal(handler: (signal: 'SIGTERM' | 'SIGINT') => unkn
   }
 }
 
+const STOP_CONTROLLER = Symbol.for('outpost.stopController');
+
+// The process-wide stop signal. The first call installs the SIGTERM and SIGINT hook; later calls
+// get the same signal. Docker and npm start load dist/signals.js with --import before the
+// OpenTelemetry register, so the hook is in before that slow load and a stop that arrives while the
+// process is still loading is kept. Without the preload, the entry file installs it instead.
+export function processStopSignal(source: SignalSource = process): AbortSignal {
+  const holder = globalThis as { [STOP_CONTROLLER]?: AbortController };
+  let controller = holder[STOP_CONTROLLER];
+  if (!controller) {
+    const created = new AbortController();
+    holder[STOP_CONTROLLER] = created;
+    onShutdownSignal((signal) => created.abort(signal), source);
+    controller = created;
+  }
+  return controller.signal;
+}
+
+// Runs handler once when signal aborts, or right away if it already has (the signal came while
+// the process was still loading).
+export function onStop(signal: AbortSignal, handler: () => unknown): void {
+  if (signal.aborted) void handler();
+  else signal.addEventListener('abort', () => void handler(), { once: true });
+}
+
 // Process exits and timers, injected in tests so nothing really exits or waits.
 export interface ExitDeps {
   exit(code: number): void;

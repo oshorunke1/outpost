@@ -8,6 +8,8 @@ import {
   createStartup,
   exitWhenDrained,
   onShutdownSignal,
+  onStop,
+  processStopSignal,
   serverShutdownSteps,
   shutdownInOrder,
   workerShutdownSteps,
@@ -169,5 +171,33 @@ describe('lifecycle', () => {
     expect(await startup.open('a', () => 41)).toBe(41);
     expect(await startup.open('b', async () => 'two')).toBe('two');
     expect(startup.closeSteps().map((step) => step.name)).toEqual([]);
+  });
+
+  test('onStop runs once on abort, or at once when the signal already aborted while loading', () => {
+    const later = new AbortController();
+    const seen: string[] = [];
+    onStop(later.signal, () => seen.push('later'));
+    expect(seen).toEqual([]);
+    later.abort('SIGTERM');
+    later.abort('SIGINT');
+    expect(seen).toEqual(['later']);
+
+    const early = new AbortController();
+    early.abort('SIGTERM');
+    onStop(early.signal, () => seen.push('early'));
+    expect(seen).toEqual(['later', 'early']);
+  });
+
+  // The preload (dist/signals.js, loaded with --import before OpenTelemetry) and the entry file
+  // share one stop signal, so the hook goes in once, as early as the process allows.
+  test('processStopSignal installs one hook per process and hands every caller the same signal', () => {
+    const proc = new EventEmitter();
+    const first = processStopSignal(proc);
+    const second = processStopSignal(proc);
+    expect(second).toBe(first);
+    expect(proc.listenerCount('SIGTERM')).toBe(1);
+    proc.emit('SIGTERM');
+    expect(first.aborted).toBe(true);
+    expect(first.reason).toBe('SIGTERM');
   });
 });
