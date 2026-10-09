@@ -146,6 +146,22 @@ Describe("EconomyCore late join", function()
 		Expect(Other.Core:Balance(1002)).ToBe(0)
 	end)
 
+	It("a join only counts on its documented 200 with a balance", function()
+		for _, Status in { 201, 202, 204, 299 } do
+			local Rig = EconomyRig.new({
+				Intercept = function(Request: any)
+					if string.match(Request.Url, "/sessions$") then
+						return Reply(Status, { userId = 1001, balance = 5 })
+					end
+					return nil
+				end,
+			})
+			Rig.Player(1001, nil, false)
+			Expect(Rig.Core:Join(1001)).ToBe(false)
+			Expect(Rig.Core:IsJoined(1001)).ToBe(false)
+		end
+	end)
+
 	It("earns are held while the join has not landed, and pay once with their key after it lands", function()
 		local Rig = EconomyRig.new()
 		Rig.Player(1001, nil, false)
