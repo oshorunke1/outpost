@@ -165,14 +165,18 @@ end
 
 -- Takes the oldest events that fit in one request, both by count and by body size.
 -- SizeOf gives the encoded byte length of one event, in game that is the length of its JSON.
--- An event that could never fit even on its own is thrown away and counted, so it can't block the rest.
+-- An event that could never fit even on its own, or whose size is not a real byte count, is thrown
+-- away and counted, so it can't block the rest.
 function TelemetryBuffer.TakeBatch(self: TelemetryBuffer, SizeOf: (Event) -> number): { Event }
 	local Taken: { Event } = {}
 	local Bytes = BodyOverheadBytes
 	while self.Size > 0 and #Taken < self.Schema.MaxEventsPerBatch do
 		local Next = self.Items[self.Head]
 		local Size = SizeOf(Next)
-		if BodyOverheadBytes + Size > self.Schema.MaxBodyBytes then
+		-- A size that is not a real byte count would break the sum, so it counts as too big.
+		-- NaN fails the at least 0 test, and an endless size fails the limit below.
+		local Real = type(Size) == "number" and Size >= 0
+		if not Real or BodyOverheadBytes + Size > self.Schema.MaxBodyBytes then
 			PopOldest(self)
 			self.Rejected += 1
 			continue

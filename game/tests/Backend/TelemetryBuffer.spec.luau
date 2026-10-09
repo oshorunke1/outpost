@@ -138,15 +138,29 @@ Describe("TelemetryBuffer TakeBatch", function()
 		Expect(Buffer:TakeRejected()).ToBe(0)
 	end)
 
-	It("counts the comma between events, which matters for many small ones", function()
-		-- With a 32 byte limit, 13 bytes around the list leave room for 10 one byte events and 9 commas.
+	It("counts the comma between events and the 13 wrapper bytes, which matter for small ones", function()
+		-- With a 33 byte limit, 13 bytes around the list leave room for 10 one byte events and 9 commas.
+		-- An 11th would need 34. Counting only 12 wrapper bytes would let it in at 33.
 		local Schema = table.clone(Telemetry)
-		Schema.MaxBodyBytes = 32
+		Schema.MaxBodyBytes = 33
 		local Buffer = TelemetryBuffer.new(30, Schema)
 		for Index = 1, 30 do
 			Buffer:Push(Ev(Index))
 		end
 		Expect(#Buffer:TakeBatch(FixedSize(1))).ToBe(10)
+	end)
+
+	It("a size that is not a finite number of bytes is treated as too big", function()
+		local Buffer = TelemetryBuffer.new(10, Telemetry)
+		for Index = 1, 5 do
+			Buffer:Push(Ev(Index))
+		end
+		local Sizes = { NaN, math.huge, -1, 100, 100 }
+		local Batch = Buffer:TakeBatch(function(Event: Event): number
+			return Sizes[Event.value :: number]
+		end)
+		Expect(Values(Batch)).ToEqual({ 4, 5 })
+		Expect(Buffer:TakeRejected()).ToBe(3)
 	end)
 
 	It("an event too big to ever send is thrown away and counted, so the queue never sticks", function()
