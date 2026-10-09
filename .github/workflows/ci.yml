@@ -7,17 +7,22 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseded pull request runs are cancelled, but every run on main finishes.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read # paths-filter lists the PR's changed files through the API
     outputs:
       luau: ${{ steps.filter.outputs.luau }}
+      backend: ${{ steps.filter.outputs.backend }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
@@ -26,12 +31,24 @@ jobs:
           filters: |
             luau:
               - 'game/**'
-              - 'contracts/**'
+              - 'contracts/framework-manifest*.json'
               - 'tools/ci/**'
+              - '.github/workflows/ci.yml'
+            backend:
+              - 'backend/**'
+              - 'contracts/**'
+              - 'tools/ci/backend-smoke.sh'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'tsconfig.base.json'
               - '.github/workflows/ci.yml'
 
   repo-hygiene:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -39,8 +56,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - name: Module size check tests
-        run: node --test tools/check-module-size.test.mjs
+      - name: Tool tests
+        run: node --test tools/check-module-size.test.mjs tools/setup-dev.test.mjs
       - name: Module size check (700 lines)
         run: node tools/check-module-size.mjs
       - name: Secret scan
@@ -57,6 +74,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.luau == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -78,3 +98,71 @@ jobs:
           name: Outpost-place
           path: game/build/Outpost.rbxl
           if-no-files-found: error
+
+  # The required checks are named backend (22) and backend (24), one per matrix entry.
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    services:
+      mysql:
+        image: mysql:8.4.11
+        env:
+          # A throwaway password for a throwaway CI container. Not a secret.
+          MYSQL_ROOT_PASSWORD: outpost-ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -poutpost-ci --silent"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+      redis:
+        image: redis:7.4.11-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=3s --health-retries=30
+    env:
+      # Root on the throwaway container, because the integration tests read INNODB_METRICS,
+      # which needs SYSTEM_VARIABLES_ADMIN.
+      TEST_MYSQL_URL: mysql://root:outpost-ci@127.0.0.1:3306
+      TEST_REDIS_URL: redis://127.0.0.1:6379/15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6 # reads the pnpm version from packageManager in package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm --filter @outpost/backend lint
+      - name: Typecheck
+        run: pnpm --filter @outpost/backend typecheck
+      - name: Unit tests
+        run: pnpm --filter @outpost/backend test:unit
+      - name: Integration tests on MySQL 8.4 and Redis 7.4
+        run: pnpm --filter @outpost/backend test:integration
+      - name: OpenAPI contract is current
+        run: pnpm --filter @outpost/backend openapi:check
+      - name: OpenAPI contract lints clean
+        run: npx --yes @redocly/cli@2.54.2 lint contracts/openapi.yaml
+      - name: Build
+        run: pnpm --filter @outpost/backend build
+      - name: Start the built server, wait for readiness, stop it with SIGTERM
+        env:
+          NODE_ENV: test
+          DATABASE_URL: mysql://root:outpost-ci@127.0.0.1:3306/outpost_smoke
+          # Its own Redis db, away from the integration tests' db 15.
+          REDIS_URL: redis://127.0.0.1:6379/14
+          OTEL_TRACES_EXPORTER: none
+          OTEL_METRICS_EXPORTER: none
+          OTEL_LOGS_EXPORTER: none
+        run: bash tools/ci/backend-smoke.sh
