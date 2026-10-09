@@ -77,6 +77,8 @@ services:
     environment:
       <<: *backend-env
       OTEL_SERVICE_NAME: outpost-backend
+    # Longer than the 10 s shutdown deadline in lifecycle.ts, so the deadline logs and exits before SIGKILL.
+    stop_grace_period: 15s
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
@@ -93,10 +95,12 @@ services:
   worker:
     build: *backend-build
     image: outpost-backend:dev
-    command: ["node", "--import", "@opentelemetry/auto-instrumentations-node/register", "dist/worker.js"]
+    command: ["node", "--import", "./dist/signals.js", "--import", "@opentelemetry/auto-instrumentations-node/register", "dist/worker.js"]
     environment:
       <<: *backend-env
       OTEL_SERVICE_NAME: outpost-worker
+    # Longer than the 10 s shutdown deadline in lifecycle.ts, so the deadline logs and exits before SIGKILL.
+    stop_grace_period: 15s
     depends_on:
       migrate:
         condition: service_completed_successfully
