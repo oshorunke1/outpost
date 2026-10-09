@@ -12,4 +12,4 @@ CREATE TABLE flags (
 INSERT INTO flags (flag_key, flag_value, critical, description, updated_at) VALUES
   ('ShopEnabled', CAST('true' AS JSON), TRUE, 'Turns the shop on or off on every server', UTC_TIMESTAMP(3)),
   ('OrbSpawnMultiplier', CAST('1' AS JSON), FALSE, 'Scales how many orbs spawn', UTC_TIMESTAMP(3)),
-  ('TelemetryEnabled', CAST('true' AS JSON), FALSE, 'Lets game servers send telemetry batches', UTC_TIMESTAMP(3));
+  ('TelemetryEnabled', CAST('true' AS JSON), FALSE, 'Lets game servers send telemetry batches. Only boolean false turns it off', UTC_TIMESTAMP(3));

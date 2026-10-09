@@ -45,7 +45,7 @@ function recordingLogger(): FlagsLogger & { lines: { details: object; message: s
 const SEED_ROWS = `INSERT INTO flags (flag_key, flag_value, critical, description, updated_at) VALUES
   ('ShopEnabled', CAST('true' AS JSON), TRUE, 'Turns the shop on or off on every server', UTC_TIMESTAMP(3)),
   ('OrbSpawnMultiplier', CAST('1' AS JSON), FALSE, 'Scales how many orbs spawn', UTC_TIMESTAMP(3)),
-  ('TelemetryEnabled', CAST('true' AS JSON), FALSE, 'Lets game servers send telemetry batches', UTC_TIMESTAMP(3))`;
+  ('TelemetryEnabled', CAST('true' AS JSON), FALSE, 'Lets game servers send telemetry batches. Only boolean false turns it off', UTC_TIMESTAMP(3))`;
 
 describe('flags on MySQL', () => {
   let ctx: IntegrationContext;
@@ -56,21 +56,27 @@ describe('flags on MySQL', () => {
     await ctx.close();
   });
 
-  // Every test after the first starts from the seeded rows, so test order never matters.
-  beforeEach(async (context) => {
-    if (context.task.name.startsWith('the migration')) return;
+  // Every test starts from the seeded rows, so test order never matters.
+  beforeEach(async () => {
     await ctx.db.query('DELETE FROM flags');
     await ctx.db.query(SEED_ROWS);
   });
 
   test('the migration seeds exactly the defaults, with their JSON types', async () => {
-    const [rows] = await ctx.db.query<RowDataPacket[]>('SELECT flag_key, JSON_TYPE(flag_value) AS kind FROM flags ORDER BY flag_key');
-    expect(rows.map((row) => [String(row.flag_key), String(row.kind)])).toEqual([
-      ['OrbSpawnMultiplier', 'INTEGER'],
-      ['ShopEnabled', 'BOOLEAN'],
-      ['TelemetryEnabled', 'BOOLEAN'],
-    ]);
-    await expect(createMysqlFlagsService(ctx.db, createFakeClock(), { logger: recordingLogger() }).list()).resolves.toEqual(FLAG_DEFAULTS);
+    // Its own freshly migrated database, so it reads what migration 005 wrote and never the reseed.
+    const fresh = await createIntegrationContext();
+    try {
+      const [rows] = await fresh.db.query<RowDataPacket[]>('SELECT flag_key, JSON_TYPE(flag_value) AS kind, description FROM flags ORDER BY flag_key');
+      expect(rows.map((row) => [String(row.flag_key), String(row.kind)])).toEqual([
+        ['OrbSpawnMultiplier', 'INTEGER'],
+        ['ShopEnabled', 'BOOLEAN'],
+        ['TelemetryEnabled', 'BOOLEAN'],
+      ]);
+      expect(String(rows[2]?.description)).toContain('Only boolean false turns it off');
+      await expect(createMysqlFlagsService(fresh.db, createFakeClock(), { logger: recordingLogger() }).list()).resolves.toEqual(FLAG_DEFAULTS);
+    } finally {
+      await fresh.close();
+    }
   });
 
   test('values are cached for five seconds', async () => {
