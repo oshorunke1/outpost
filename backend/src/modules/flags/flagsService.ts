@@ -28,6 +28,9 @@ export interface MysqlFlagsOptions {
 }
 
 export const FLAG_CACHE_MS = 5_000;
+// After a failed load with nothing cached, callers get the 503 straight away for this long, which
+// matches its Retry-After of 1.
+export const FLAGS_COLD_RETRY_MS = 1_000;
 
 export function createMemoryFlagsService(values: Record<string, FlagValue> = { ...FLAG_DEFAULTS }): FlagsService {
   return { list: async () => ({ ...values }) };
@@ -42,13 +45,21 @@ function jsonType(value: unknown): string {
   return Array.isArray(value) ? 'array' : typeof value;
 }
 
+const unavailable = (cause: unknown) =>
+  new AppError(503, 'flags_unavailable', 'Flags are temporarily unavailable', { cause, headers: { 'retry-after': '1' } });
+
 // A short cache: every game server polls each minute, and flags change rarely. A row overrides its
 // default, so a deleted row falls back to the default. If a reload fails the last good values are
 // served stale (logged) and the next try waits a full cache period, so an outage is not hammered.
+// Only one load runs at a time and everyone waiting shares it, so a burst of callers on an expired
+// cache makes one query (and an older load can never overwrite a newer one).
 export function createMysqlFlagsService(db: Db, clock: Clock, options: MysqlFlagsOptions): FlagsService {
   const cacheMs = options.cacheMs ?? FLAG_CACHE_MS;
   let cached: Record<string, FlagValue> | null = null;
   let freshUntil = Number.NEGATIVE_INFINITY;
+  let inFlight: Promise<Record<string, FlagValue>> | null = null;
+  let coldError: unknown = null;
+  let coldRetryAt = Number.NEGATIVE_INFINITY;
 
   async function load(): Promise<Record<string, FlagValue>> {
     const [rows] = await db.query<RowDataPacket[]>('SELECT flag_key, flag_value FROM flags ORDER BY flag_key');
@@ -62,19 +73,29 @@ export function createMysqlFlagsService(db: Db, clock: Clock, options: MysqlFlag
     return values;
   }
 
+  async function reload(): Promise<Record<string, FlagValue>> {
+    try {
+      cached = await load();
+    } catch (error) {
+      if (!cached) {
+        coldError = error;
+        coldRetryAt = clock.now() + FLAGS_COLD_RETRY_MS;
+        throw unavailable(error);
+      }
+      options.logger.warn({ cause: summarizeCause(error) }, 'flag reload failed; serving the last good values');
+    }
+    freshUntil = clock.now() + cacheMs;
+    return cached;
+  }
+
   return {
     async list() {
       if (cached && clock.now() < freshUntil) return { ...cached };
-      try {
-        cached = await load();
-      } catch (error) {
-        if (!cached) {
-          throw new AppError(503, 'flags_unavailable', 'Flags are temporarily unavailable', { cause: error, headers: { 'retry-after': '1' } });
-        }
-        options.logger.warn({ cause: summarizeCause(error) }, 'flag reload failed; serving the last good values');
-      }
-      freshUntil = clock.now() + cacheMs;
-      return { ...cached };
+      if (!cached && clock.now() < coldRetryAt) throw unavailable(coldError);
+      inFlight ??= reload().finally(() => {
+        inFlight = null;
+      });
+      return { ...(await inFlight) };
     },
   };
 }
