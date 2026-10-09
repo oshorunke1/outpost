@@ -1,11 +1,15 @@
 --!strict
 local Harness = require("@Tests/Harness")
+local BackendClient = require("@Logic/Backend/BackendClient")
 local PurchaseFlow = require("@Logic/Backend/PurchaseFlow")
 local Requests = require("@Logic/Backend/Requests")
 
 local Describe = Harness.Describe
 local It = Harness.It
 local Expect = Harness.Expect
+
+-- selene: allow(divide_by_zero)
+local NaN = 0 / 0
 
 local function Reply(Status: number, Body: any?)
 	return { Ok = Status >= 200 and Status < 300, Status = Status, Body = Body, Headers = {} }
@@ -105,6 +109,28 @@ Describe("PurchaseFlow.Submit", function()
 		Expect(PurchaseFlow.Submit(Client, Requests, 1001, "RedHat", Key).Action).ToBe("Grant")
 		Expect(Sent[1].Request.Headers["Idempotency-Key"]).ToBe(Key)
 		Expect(Sent[2].Request.Headers["Idempotency-Key"]).ToBe(Key)
+	end)
+
+	It("a shorter time left caps the deadline, and a longer one never stretches it past 10 seconds", function()
+		local Client, Sent = FakeClient({ Reply(201, Granted), Reply(201, Granted), Reply(201, Granted) })
+		PurchaseFlow.Submit(Client, Requests, 1001, "RedHat", "boot-0badf00d:buy:2", 4)
+		PurchaseFlow.Submit(Client, Requests, 1001, "RedHat", "boot-0badf00d:buy:3", 60)
+		PurchaseFlow.Submit(Client, Requests, 1001, "RedHat", "boot-0badf00d:buy:4", nil)
+		Expect(Sent[1].Options.DeadlineSeconds).ToBe(4)
+		Expect(Sent[2].Options.DeadlineSeconds).ToBe(10)
+		Expect(Sent[3].Options.DeadlineSeconds).ToBe(10)
+	end)
+
+	It("no time left answers RetryLater without sending, so the key is still unused", function()
+		local Client, Sent = FakeClient({})
+		for _, Left in { 0, -2, NaN } do
+			local Decision, Response =
+				PurchaseFlow.Submit(Client, Requests, 1001, "RedHat", "boot-0badf00d:buy:5", Left)
+			Expect(Decision.Action).ToBe("RetryLater")
+			Expect(Response.Status).ToBe(-3)
+		end
+		Expect(#Sent).ToBe(0)
+		Expect(PurchaseFlow.OutOfTime).ToBe(BackendClient.RetryLater)
 	end)
 
 	It("a key the backend would refuse throws before anything is sent", function()

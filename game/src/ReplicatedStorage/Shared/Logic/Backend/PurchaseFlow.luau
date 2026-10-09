@@ -64,17 +64,32 @@ function PurchaseFlow.Decide(Response: Response): Decision
 	return RetryLater()
 end
 
+-- The status Submit answers when there was no time left to send. It matches BackendClient.RetryLater.
+PurchaseFlow.OutOfTime = -3
+
 -- Sends one purchase with the caller's key and decides the answer. Requests checks the key and
 -- the UserId first and throws on a bad one, before anything is sent.
+-- SecondsLeft is how much of the click's time is still left, when something else ran first. The
+-- deadline is the smaller of it and DeadlineSeconds. With no time left nothing is sent, so the key
+-- stays unused and the answer is RetryLater.
 function PurchaseFlow.Submit(
 	Client: Client,
 	Build: Builders,
 	UserId: number,
 	ItemId: string,
-	Key: string
+	Key: string,
+	SecondsLeft: number?
 ): (Decision, Response)
 	local Request = Build.Purchase(UserId, ItemId, Key)
-	local Response = Client:Send(Request, { DeadlineSeconds = PurchaseFlow.DeadlineSeconds })
+	local Seconds = PurchaseFlow.DeadlineSeconds
+	if SecondsLeft ~= nil then
+		if not (SecondsLeft > 0) then
+			local Response: Response = { Ok = false, Status = PurchaseFlow.OutOfTime, Body = nil }
+			return RetryLater(), Response
+		end
+		Seconds = math.min(Seconds, SecondsLeft)
+	end
+	local Response = Client:Send(Request, { DeadlineSeconds = Seconds })
 	return PurchaseFlow.Decide(Response), Response
 end
 
