@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { buildApp } from '../../../src/app.js';
 import { createMemoryAppDeps } from '../../../src/memoryDeps.js';
-import { PROBE_TIMEOUT_MS, READY_CACHE_MS, createHealthChecks } from '../../../src/platform/health.js';
+import { PROBE_LOG_INTERVAL_MS, PROBE_TIMEOUT_MS, READY_CACHE_MS, createHealthChecks } from '../../../src/platform/health.js';
 import { createFakeClock } from '../../support/clock.js';
 
 const appWith = async (health: ReturnType<typeof createHealthChecks>) => buildApp((await createMemoryAppDeps({ overrides: { health } })).deps);
@@ -24,6 +24,27 @@ describe('health', () => {
     expect(report).toBeUndefined();
     await vi.advanceTimersByTimeAsync(1);
     expect(report).toEqual({ ok: false, draining: false, checks: { slow: 'fail' } });
+  });
+
+  // M2: operators see why a probe failed, at most once per probe per PROBE_LOG_INTERVAL_MS, and
+  // only the error's type, code and message (never a stack or the driver's own fields).
+  test('a failing probe is logged with its reason, rate limited per probe', async () => {
+    const clock = createFakeClock();
+    const lines: { details: Record<string, unknown>; message: string }[] = [];
+    const logger = { warn: (details: object, message: string) => void lines.push({ details: details as Record<string, unknown>, message }) };
+    const refused = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:3306'), { code: 'ECONNREFUSED', sql: 'SELECT secret', config: { password: 'hunter2' } });
+    const health = createHealthChecks({ mysql: async () => Promise.reject(refused), redis: async () => 'PONG' }, { clock, logger });
+    await Promise.all(Array.from({ length: 10 }, () => health.ready()));
+    expect(lines).toEqual([
+      { details: { probe: 'mysql', type: 'Error', code: 'ECONNREFUSED', reason: 'connect ECONNREFUSED 127.0.0.1:3306' }, message: 'readiness probe failed' },
+    ]);
+    expect(JSON.stringify(lines)).not.toContain('hunter2');
+    clock.advance(READY_CACHE_MS);
+    await health.ready();
+    expect(lines).toHaveLength(1);
+    clock.advance(PROBE_LOG_INTERVAL_MS);
+    await health.ready();
+    expect(lines).toHaveLength(2);
   });
 
   test('readyz is 200 when every probe passes', async () => {

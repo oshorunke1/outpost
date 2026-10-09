@@ -20,6 +20,8 @@ export interface HealthOptions {
   timeoutMs?: number; // a probe slower than this counts as a fail (default PROBE_TIMEOUT_MS)
   cacheMs?: number; // how long one report answers every readiness call (default READY_CACHE_MS)
   clock?: Clock;
+  // Told why a probe failed, at most once per probe per PROBE_LOG_INTERVAL_MS. A pino logger fits.
+  logger?: { warn(details: object, message: string): void };
 }
 
 // A burst of readiness probes (several load balancers, a busy orchestrator) costs one MySQL and
@@ -29,6 +31,20 @@ export const READY_CACHE_MS = 1_000;
 // A probe that has not answered by then is a fail, so a blackholed MySQL or Redis is a quick 503
 // instead of a request that hangs until the load balancer gives up.
 export const PROBE_TIMEOUT_MS = 1_000;
+
+// A dead dependency is probed about once a second; its failure is logged far less often than that.
+export const PROBE_LOG_INTERVAL_MS = 30_000;
+
+// Only the error's type, code and message. Never the stack or driver fields such as sql or config.
+function failureDetails(name: string, error: unknown): object {
+  const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
+  return {
+    probe: name,
+    type: error instanceof Error ? error.name : typeof error,
+    ...(typeof code === 'string' ? { code } : {}),
+    reason: error instanceof Error ? error.message : '[non-error]',
+  };
+}
 
 async function withTimeout<T>(work: () => Promise<T>, ms: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -52,6 +68,15 @@ export function createHealthChecks(probes: Record<string, () => Promise<unknown>
   let draining = false;
   let cached: { report: HealthReport; at: number } | null = null;
   let inFlight: Promise<HealthReport> | null = null;
+  const lastLogged = new Map<string, number>();
+
+  function logFailure(name: string, error: unknown): void {
+    if (!options.logger) return;
+    const last = lastLogged.get(name);
+    if (last !== undefined && clock.now() - last < PROBE_LOG_INTERVAL_MS) return;
+    lastLogged.set(name, clock.now());
+    options.logger.warn(failureDetails(name, error), 'readiness probe failed');
+  }
 
   async function probeAll(): Promise<HealthReport> {
     const results = await Promise.all(
@@ -59,7 +84,8 @@ export function createHealthChecks(probes: Record<string, () => Promise<unknown>
         try {
           await withTimeout(probe, timeoutMs);
           return [name, 'ok'];
-        } catch {
+        } catch (error) {
+          logFailure(name, error);
           return [name, 'fail'];
         }
       }),

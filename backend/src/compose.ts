@@ -44,7 +44,8 @@ export interface ComposeOptions {
   argon2?: Argon2Params; // integration tests pass FAST_ARGON2; everything else gets PRODUCTION_ARGON2
   // Where the ledger reports a lost COMMIT or a failed rollback. Defaults to a logger with the
   // app's level, redaction and service name on stdout; tests pass one they can read.
-  // The same logger also gets the flags service's warnings (a failed reload, a bad stored value).
+  // The same logger also gets the flags service's warnings (a failed reload, a bad stored value)
+  // and failed readiness probes.
   logger?: ComposeLogger;
 }
 
@@ -115,6 +116,9 @@ export async function createAppDeps(config: AppConfig, infra: Infra, options: Co
     flags: createMysqlFlagsService(db, clock, { logger: options.logger ?? baseLogger.child({ module: 'flags' }) }),
     metrics,
     // Each probe is bounded at a second, so a hung pool or a Redis that never answers is a fail, not a hang.
-    health: createHealthChecks({ mysql: () => probeDb(db, PROBE_TIMEOUT_MS), redis: () => redis.ping() }),
+    health: createHealthChecks(
+      { mysql: () => probeDb(db, PROBE_TIMEOUT_MS), redis: () => redis.ping() },
+      { logger: options.logger ?? baseLogger.child({ module: 'health' }) },
+    ),
   };
 }
