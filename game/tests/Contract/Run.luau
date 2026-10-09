@@ -5,6 +5,7 @@
 -- It needs OUTPOST_BACKEND_URL and OUTPOST_GAME_API_KEY in the environment. CI sets both.
 -- Every run picks new players and a new key prefix, so it passes again and again on one database.
 -- It never prints the key.
+local DateTime = require("@lune/datetime")
 local Process = require("@lune/process")
 local Task = require("@lune/task")
 local Harness = require("@Tests/Harness")
@@ -15,7 +16,8 @@ local CircuitBreaker = require("@Logic/Backend/CircuitBreaker")
 local RetryPolicy = require("@Logic/Backend/RetryPolicy")
 local RateLimiter = require("@Logic/Net/RateLimiter")
 
--- Contract players live far above any Roblox user id today and above the ids pnpm demo picks.
+-- Contract players live far above any Roblox user id today and above the ids pnpm demo picks,
+-- which stay under this one.
 local FirstContractId = 10000000000000
 
 local BaseUrl = Process.env.OUTPOST_BACKEND_URL
@@ -49,12 +51,11 @@ local Client = BackendClient.new({
 	end,
 })
 
--- The suite uses UserId, UserId plus 1 and UserId plus 2. Each second of wall clock owns its own
--- block of 1000 ids, cut into slots of three, so two runs never share a player. The random slot
--- only matters for two runs in the same second.
-math.randomseed(os.time() + math.floor((os.clock() % 1) * 1000000))
-local UserId = FirstContractId + (os.time() % 1000000000) * 1000 + 3 * math.random(0, 332)
-local KeyPrefix = string.format("contract-%d-%d", UserId, math.random(100000, 999999))
+-- The suite uses UserId, UserId plus 1 and UserId plus 2. Every millisecond of wall clock owns its
+-- own three ids, and a run takes far longer than that, so two runs in a row never share a player.
+local Millis = DateTime.now().unixTimestampMillis
+local UserId = FirstContractId + (Millis % 1000000000000) * 3
+local KeyPrefix = string.format("contract-%d", UserId)
 Suite.Run("real backend", Client, UserId, KeyPrefix)
 
 local Passed = 0
