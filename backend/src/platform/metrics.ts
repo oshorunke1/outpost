@@ -69,9 +69,20 @@ export function registerHttpMetrics(app: ZodApp, metrics: Metrics): void {
   });
 }
 
+export interface MetricsServerOptions {
+  // Gets any server error after listen. The entry points log it and exit non-zero. Left out, the
+  // error goes to stderr and the process exits with 1, never as an unhandled error event.
+  onError?: (error: Error) => void;
+}
+
+function exitOnMetricsServerError(error: Error): void {
+  console.error('metrics server failed', error);
+  process.exit(1);
+}
+
 // Prometheus scrapes this on its own port, which Compose never publishes, so /metrics is not public.
-// host comes from METRICS_HOST, loopback unless set.
-export async function startMetricsServer(registry: Registry, port: number, host: string): Promise<Server> {
+// host comes from METRICS_HOST, loopback unless set. A listen error such as EADDRINUSE rejects.
+export async function startMetricsServer(registry: Registry, port: number, host: string, options: MetricsServerOptions = {}): Promise<Server> {
   const server = createServer((request, response) => {
     // Compare the path only, so a scrape config that adds params still matches.
     if (request.method === 'GET' && (request.url ?? '').split('?')[0] === '/metrics') {
@@ -94,6 +105,7 @@ export async function startMetricsServer(registry: Registry, port: number, host:
     server.once('error', reject);
     server.listen(port, host, () => {
       server.off('error', reject);
+      server.on('error', options.onError ?? exitOnMetricsServerError);
       resolve();
     });
   });

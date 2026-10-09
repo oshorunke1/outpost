@@ -86,4 +86,19 @@ describe('metrics', () => {
       first.close();
     }
   });
+
+  // M6: an error after listen goes to onError (the entry points log it and exit non-zero) instead
+  // of being an unhandled error event that kills the process with no log line.
+  test('a server error after listen is handed to onError', async () => {
+    const metrics = createMetrics();
+    const seen: unknown[] = [];
+    const server = await startMetricsServer(metrics.registry, 0, '127.0.0.1', { onError: (error) => void seen.push(error) });
+    try {
+      const failure = Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' });
+      expect(() => server.emit('error', failure)).not.toThrow();
+      expect(seen).toEqual([failure]);
+    } finally {
+      server.close();
+    }
+  });
 });
