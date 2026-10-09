@@ -31,7 +31,7 @@ describe('pnpm demo against the real app', () => {
     await ctx.close();
   });
 
-  const config = (userId: number): DemoConfig => ({ baseUrl, apiKey, userId, userIdSource: 'env' });
+  const config = (userId: number): DemoConfig => ({ baseUrl, apiKey, userId, userIdSource: 'env', jaegerUrl: 'http://localhost:16686' });
   const quiet = { fetch: (url: string, init?: RequestInit) => fetch(url, init), log: () => undefined };
 
   test('readyz is ready', async () => {

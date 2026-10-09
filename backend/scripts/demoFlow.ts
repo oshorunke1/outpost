@@ -11,6 +11,8 @@ export interface DemoConfig {
   apiKey: string;
   userId: number;
   userIdSource: 'env' | 'random';
+  // Only used for the closing hint that points at the traces.
+  jaegerUrl: string;
 }
 
 // A mistake the demo explains in one line: bad settings, a backend that is not up, or an answer
@@ -24,11 +26,15 @@ export class DemoError extends Error {
 export const DEMO_PRICES = { RedHat: 25, GoldCrown: 100 } as const;
 
 export const DEFAULT_BACKEND_URL = 'http://127.0.0.1:3000';
+export const DEFAULT_JAEGER_URL = 'http://localhost:16686';
 export const READY_TIMEOUT_MS = 60_000;
 const FIRST_BACKOFF_MS = 250;
 const MAX_BACKOFF_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 10_000;
 const USER_ID = /^[1-9][0-9]{0,15}$/;
+// The shape the backend accepts (identity/crypto/apiKey.ts): printable, no spaces or control characters.
+const API_KEY = /^opk_[a-z0-9-]{3,40}\.[A-Za-z0-9_-]{32,128}$/;
+const BAD_KEY = 'OUTPOST_GAME_API_KEY is not a well-formed key (expected opk_<clientId>.<secret>)';
 const EARN_AMOUNT = 10;
 const EARN_BATCHES = 3;
 
@@ -38,21 +44,31 @@ const randomDemoUserId = () => randomInt(1_000_000_000_000, 10_000_000_000_000);
 export function readDemoConfig(env: Record<string, string | undefined>, randomUserId: () => number = randomDemoUserId): DemoConfig {
   const apiKey = env.OUTPOST_GAME_API_KEY;
   if (!apiKey) throw new DemoError('OUTPOST_GAME_API_KEY is not set. Run pnpm setup:dev first, or export the key the seed printed.');
+  // Never echo the value: a key with a pasted line break is still mostly the real secret.
+  if (!API_KEY.test(apiKey)) throw new DemoError(BAD_KEY);
 
-  const rawUrl = env.OUTPOST_BACKEND_URL ?? DEFAULT_BACKEND_URL;
-  const url = URL.canParse(rawUrl) ? new URL(rawUrl) : null;
-  if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
-    throw new DemoError(`OUTPOST_BACKEND_URL must be an http or https URL (got ${JSON.stringify(rawUrl)})`);
-  }
-  const baseUrl = rawUrl.replace(/\/+$/, '');
+  const baseUrl = readHttpUrl('OUTPOST_BACKEND_URL', env.OUTPOST_BACKEND_URL ?? DEFAULT_BACKEND_URL);
+  const jaegerUrl = readHttpUrl('OUTPOST_JAEGER_URL', env.OUTPOST_JAEGER_URL ?? DEFAULT_JAEGER_URL);
 
+  // Empty counts as unset, the way an env file line like OUTPOST_DEMO_USER_ID= is usually meant.
   const rawUserId = env.OUTPOST_DEMO_USER_ID;
-  if (rawUserId === undefined) return { baseUrl, apiKey, userId: randomUserId(), userIdSource: 'random' };
+  if (rawUserId === undefined || rawUserId === '') return { baseUrl, apiKey, userId: randomUserId(), userIdSource: 'random', jaegerUrl };
   const userId = Number(rawUserId);
   if (!USER_ID.test(rawUserId) || !Number.isSafeInteger(userId)) {
     throw new DemoError(`OUTPOST_DEMO_USER_ID must be a whole number from 1 to ${Number.MAX_SAFE_INTEGER} (got ${JSON.stringify(rawUserId)})`);
   }
-  return { baseUrl, apiKey, userId, userIdSource: 'env' };
+  return { baseUrl, apiKey, userId, userIdSource: 'env', jaegerUrl };
+}
+
+// An http(s) origin plus an optional path, without the trailing slash. Credentials, a query or a
+// fragment would break the joined paths, and credentials would end up in the error lines.
+function readHttpUrl(name: string, raw: string): string {
+  const url = URL.canParse(raw) ? new URL(raw) : null;
+  if (url && (url.username || url.password)) throw new DemoError(`${name} must not carry a user name or password`);
+  if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:') || url.search || url.hash) {
+    throw new DemoError(`${name} must be an http or https URL with no query or fragment (got ${JSON.stringify(raw)})`);
+  }
+  return `${url.origin}${url.pathname}`.replace(/\/+$/, '');
 }
 
 // fetch only says "fetch failed"; the useful part (ECONNREFUSED, ENOTFOUND, a timeout) is in its cause.
@@ -76,8 +92,8 @@ interface Reply {
   headers: Headers;
 }
 
-async function send(fetch: FetchLike, url: string, init: RequestInit): Promise<Reply> {
-  const response = await fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+async function send(fetch: FetchLike, url: string, init: RequestInit, signal: AbortSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS)): Promise<Reply> {
+  const response = await fetch(url, { ...init, signal });
   const text = await response.text();
   let body: unknown = null;
   if (text) {
@@ -114,25 +130,30 @@ export interface ReadyOptions {
   sleep: (ms: number) => Promise<void>;
   now: () => number;
   timeoutMs?: number;
+  // Makes the abort signal for one request; tests pass a recorder.
+  requestTimeout?: (ms: number) => AbortSignal;
 }
 
 // Polls /readyz with a doubling backoff (capped at 5 s) until it answers ready or the time is up.
+// The deadline is hard: a request never gets longer than the time that is left.
 export async function waitForReady(options: ReadyOptions): Promise<unknown> {
   const timeoutMs = options.timeoutMs ?? READY_TIMEOUT_MS;
   const deadline = options.now() + timeoutMs;
   let delay = FIRST_BACKOFF_MS;
-  let last: string;
+  const requestTimeout = options.requestTimeout ?? ((ms: number) => AbortSignal.timeout(ms));
+  let last = 'no answer yet';
   for (;;) {
+    const left = deadline - options.now();
+    if (left <= 0) throw new DemoError(`the backend at ${options.baseUrl} was not ready within ${timeoutMs / 1000}s; last ${last}`);
     try {
-      const reply = await send(options.fetch, `${options.baseUrl}/readyz`, { method: 'GET' });
+      const reply = await send(options.fetch, `${options.baseUrl}/readyz`, { method: 'GET' }, requestTimeout(Math.min(REQUEST_TIMEOUT_MS, left)));
       if (reply.status === 200 && isRecord(reply.body) && reply.body.status === 'ready') return reply.body;
       last = `answer HTTP ${describeReply(reply)}`;
     } catch (error) {
       last = `error ${describeFetchError(error)}. Is the stack up? Try docker compose up -d --build --wait`;
     }
     const remaining = deadline - options.now();
-    if (remaining <= 0) throw new DemoError(`the backend at ${options.baseUrl} was not ready within ${timeoutMs / 1000}s; last ${last}`);
-    await options.sleep(Math.min(delay, remaining));
+    if (remaining > 0) await options.sleep(Math.min(delay, remaining));
     delay = Math.min(delay * 2, MAX_BACKOFF_MS);
   }
 }
@@ -140,6 +161,8 @@ export async function waitForReady(options: ReadyOptions): Promise<unknown> {
 export interface RunDeps {
   fetch: FetchLike;
   log: (line: string) => void;
+  // Told about the access token as soon as it exists, so the caller can keep it out of errors.
+  onSecret?: (secret: string) => void;
   runId?: string;
   now?: () => number;
 }
@@ -221,6 +244,7 @@ export async function runDemo(config: DemoConfig, deps: RunDeps): Promise<DemoSu
   const grant = await step(grantStep, 'POST', '/auth/service-token', 200, { apiKey: config.apiKey });
   expectField(grantStep, grant.body, 'tokenType', 'Bearer');
   const token = stringField(grantStep, grant.body, 'accessToken');
+  deps.onSecret?.(token);
   // Never print the token itself.
   deps.log(okLine(grantStep, grant.status, { scope: field(grant.body, 'scope'), expiresIn: field(grant.body, 'expiresIn') }));
 
@@ -344,20 +368,41 @@ export interface MainDeps {
   now: () => number;
   log: (line: string) => void;
   error: (line: string) => void;
+  // Loads the root .env into env. Runs inside the error handling, so a bad file is one line too.
+  loadEnv?: () => void;
 }
 
-// Returns the exit code: 0 after a full run, 1 with one clear line on anything else.
+// Replaces every secret, and every long piece of one, with [redacted]. The pieces matter when the
+// value was mangled (a pasted line break) and only part of it shows up in a message.
+function redact(message: string, secrets: Iterable<string>): string {
+  let out = message;
+  for (const secret of secrets) {
+    const pieces = [secret, ...secret.split(/[\s.]+/).filter((piece) => piece.length >= 8)];
+    for (const piece of pieces.sort((a, b) => b.length - a.length)) out = out.split(piece).join('[redacted]');
+  }
+  return out;
+}
+
+// Returns the exit code: 0 after a full run, 1 with one clear line on anything else. The key and
+// the access token never reach either stream, whatever the error says.
 export async function mainDemo(env: Record<string, string | undefined>, deps: MainDeps): Promise<number> {
+  const secrets = new Set<string>();
   try {
+    try {
+      deps.loadEnv?.();
+    } catch (error) {
+      throw new DemoError(`could not load the root .env (${error instanceof Error ? error.message : String(error)})`);
+    }
+    if (env.OUTPOST_GAME_API_KEY) secrets.add(env.OUTPOST_GAME_API_KEY);
     const config = readDemoConfig(env);
     const ready = await waitForReady({ baseUrl: config.baseUrl, fetch: deps.fetch, sleep: deps.sleep, now: deps.now });
     deps.log(okLine('backend is ready', 200, ready));
-    await runDemo(config, { fetch: deps.fetch, log: deps.log });
+    await runDemo(config, { fetch: deps.fetch, log: deps.log, onSecret: (secret) => secrets.add(secret) });
     deps.log('');
-    deps.log('Done. Open http://localhost:16686, choose the outpost-backend service and press Find Traces to see these calls.');
+    deps.log(`Done. Open ${config.jaegerUrl}, choose the outpost-backend service and the operation POST /v1/economy/transactions, then press Find Traces.`);
     return 0;
   } catch (error) {
-    deps.error(`\ndemo failed: ${error instanceof Error ? error.message : String(error)}`);
+    deps.error(redact(`\ndemo failed: ${error instanceof Error ? error.message : String(error)}`, secrets));
     return 1;
   }
 }

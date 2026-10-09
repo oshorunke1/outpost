@@ -29,7 +29,11 @@ describe('readDemoConfig', () => {
     expect(config).toMatchObject({ userId: 9007199254740991, userIdSource: 'env' });
   });
 
-  test.each(['0', '-5', '1.5', '1e3', '007', 'abc', ' 12', '9007199254740992', '12345678901234567', ''])(
+  test('an empty OUTPOST_DEMO_USER_ID means a random player, as an env file often leaves it', () => {
+    expect(readDemoConfig({ OUTPOST_GAME_API_KEY: KEY, OUTPOST_DEMO_USER_ID: '' }, () => 7)).toMatchObject({ userId: 7, userIdSource: 'random' });
+  });
+
+  test.each(['0', '-5', '1.5', '1e3', '007', 'abc', ' 12', '9007199254740992', '12345678901234567'])(
     'refuses OUTPOST_DEMO_USER_ID %j with a clear error',
     (value) => {
       expect(() => readDemoConfig({ OUTPOST_GAME_API_KEY: KEY, OUTPOST_DEMO_USER_ID: value })).toThrow(
@@ -40,9 +44,48 @@ describe('readDemoConfig', () => {
 
   test('takes OUTPOST_BACKEND_URL, drops a trailing slash and refuses anything but http(s)', () => {
     expect(readDemoConfig({ OUTPOST_GAME_API_KEY: KEY, OUTPOST_BACKEND_URL: 'http://localhost:13000/' }).baseUrl).toBe('http://localhost:13000');
-    for (const bad of ['localhost:3000', 'ftp://x', 'not a url']) {
+    expect(readDemoConfig({ OUTPOST_GAME_API_KEY: KEY, OUTPOST_BACKEND_URL: 'https://api.example.test/outpost/' }).baseUrl).toBe('https://api.example.test/outpost');
+    for (const bad of ['localhost:3000', 'ftp://x', 'not a url', 'http://host/?x=1', 'http://host/#top']) {
       expect(() => readDemoConfig({ OUTPOST_GAME_API_KEY: KEY, OUTPOST_BACKEND_URL: bad })).toThrow(/OUTPOST_BACKEND_URL must be an http or https URL/);
     }
+  });
+
+  test('refuses a backend URL with credentials and never echoes them', () => {
+    for (const bad of ['http://user:hunter2-pass@host:3000', 'http://hunter2-only@host']) {
+      let message = '';
+      try {
+        readDemoConfig({ OUTPOST_GAME_API_KEY: KEY, OUTPOST_BACKEND_URL: bad });
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toMatch(/OUTPOST_BACKEND_URL must not carry a user name or password/);
+      expect(message).not.toContain('hunter2');
+    }
+  });
+
+  test('reads OUTPOST_JAEGER_URL for the closing hint, default http://localhost:16686', () => {
+    expect(readDemoConfig({ OUTPOST_GAME_API_KEY: KEY }).jaegerUrl).toBe('http://localhost:16686');
+    expect(readDemoConfig({ OUTPOST_GAME_API_KEY: KEY, OUTPOST_JAEGER_URL: 'http://127.0.0.1:26686/' }).jaegerUrl).toBe('http://127.0.0.1:26686');
+    for (const bad of ['jaeger:16686', 'ftp://x', 'http://u:p@host', 'http://host/?q=1']) {
+      expect(() => readDemoConfig({ OUTPOST_GAME_API_KEY: KEY, OUTPOST_JAEGER_URL: bad })).toThrow(/OUTPOST_JAEGER_URL must/);
+    }
+  });
+
+  test.each([
+    ['a line break', `opk_game-server.${'s'.repeat(40)}\nTAILSECRET`],
+    ['a trailing space', `${KEY} `],
+    ['a NUL', `opk_game-server.${'s'.repeat(40)}\u0000x`],
+    ['no client id', `opk_.${'s'.repeat(43)}`],
+    ['no prefix', `game-server.${'s'.repeat(43)}`],
+    ['a short secret', 'opk_game-server.short'],
+  ])('refuses a key with %s without echoing it', (_label, key) => {
+    let message = '';
+    try {
+      readDemoConfig({ OUTPOST_GAME_API_KEY: key });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toBe('OUTPOST_GAME_API_KEY is not a well-formed key (expected opk_<clientId>.<secret>)');
   });
 });
 
@@ -94,6 +137,18 @@ describe('waitForReady', () => {
     expect(ready).toEqual({ status: 'ready', checks: { mysql: 'ok', redis: 'ok' } });
     expect(urls).toEqual([`${BASE}/readyz`, `${BASE}/readyz`, `${BASE}/readyz`]);
     expect(time.sleeps).toEqual([250, 500]);
+  });
+
+  test('never lets one readyz request run past the deadline', async () => {
+    const time = fakeTime();
+    const limits: number[] = [];
+    const refused: FetchLike = () => Promise.reject(new TypeError('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) }));
+    const requestTimeout = (ms: number) => {
+      limits.push(ms);
+      return AbortSignal.timeout(ms);
+    };
+    await expect(waitForReady({ baseUrl: BASE, fetch: refused, ...time, timeoutMs: 2_000, requestTimeout })).rejects.toThrow(/within 2s/);
+    expect(limits).toEqual([2_000, 1_750, 1_250, 250]);
   });
 
   test('gives up after the timeout and says what it last saw', async () => {
@@ -192,7 +247,7 @@ function fakeBackend(options: FakeOptions = {}) {
   return { fetch, seen, balances };
 }
 
-const config = (overrides: Partial<DemoConfig> = {}): DemoConfig => ({ baseUrl: BASE, apiKey: KEY, userId: 4242, userIdSource: 'env', ...overrides });
+const config = (overrides: Partial<DemoConfig> = {}): DemoConfig => ({ baseUrl: BASE, apiKey: KEY, userId: 4242, userIdSource: 'env', jaegerUrl: 'http://localhost:16686', ...overrides });
 
 describe('runDemo', () => {
   test('walks the whole game contract and checks the answers', async () => {
@@ -230,6 +285,18 @@ describe('runDemo', () => {
     expect(second).toEqual({ userId: 4242, startBalance: first.endBalance, endBalance: first.endBalance + 5 });
   });
 
+  test('the crown a rich player buys must land on the right balance', async () => {
+    const tamper: FakeOptions['tamper'] = (_p, _m, status, body) => (status === 201 && body.itemId === 'GoldCrown' ? { status, body: { ...body, balanceAfter: 0 } } : undefined);
+    const backend = fakeBackend({ startBalance: 500, tamper });
+    await expect(runDemo(config(), { fetch: backend.fetch, log: () => undefined, runId: 'rich-bad' })).rejects.toThrow(/buy the Gold Crown with 505 Coins: balanceAfter should be 405, got 0/);
+  });
+
+  test('the crown a rich player buys must be charged its catalog price', async () => {
+    const tamper: FakeOptions['tamper'] = (_p, _m, status, body) => (status === 201 && body.itemId === 'GoldCrown' ? { status, body: { ...body, amount: -1 } } : undefined);
+    const backend = fakeBackend({ startBalance: 500, tamper });
+    await expect(runDemo(config(), { fetch: backend.fetch, log: () => undefined, runId: 'rich-price' })).rejects.toThrow(/buy the Gold Crown with 505 Coins: amount should be -100, got -1/);
+  });
+
   test('a rich player buys the Gold Crown instead of being refused', async () => {
     const backend = fakeBackend({ startBalance: 500 });
     const lines: string[] = [];
@@ -253,6 +320,19 @@ describe('runDemo', () => {
 
   const broken: Array<[label: string, tamper: NonNullable<FakeOptions['tamper']>, message: RegExp]> = [
     ['a replay that is not marked replayed', (path, _m, status, body) => (status === 200 && path === '/v1/economy/transactions' ? { status, body: { ...body, replayed: false } } : undefined), /replayed should be true/],
+    ['a token of the wrong type', (path, _m, status, body) => (path === '/auth/service-token' && status === 200 ? { status, body: { ...body, tokenType: 'MAC' } } : undefined), /tokenType should be "Bearer", got "MAC"/],
+    ['a flag value that is an object', (path, _m, status) => (path === '/v1/flags' ? { status, body: { flags: { ShopEnabled: true, OrbSpawnMultiplier: 1, TelemetryEnabled: true, Extra: {} } } } : undefined), /flag Extra has an unsupported value \{\}/],
+    ['a join for another player', (path, _m, status, body) => (path.endsWith('/sessions') ? { status, body: { ...body, userId: 4243 } } : undefined), /userId should be 4242, got 4243/],
+    ['a fresh earn marked replayed', (_p, _m, status, body) => (status === 201 && body.kind === 'earn' ? { status, body: { ...body, replayed: true } } : undefined), /earn batch 1, 10 Coins: replayed should be false, got true/],
+    ['a replay with a different balance', (path, _m, status, body) => (status === 200 && path === '/v1/economy/transactions' ? { status, body: { ...body, balanceAfter: 31 } } : undefined), /replays and pays nothing: balanceAfter should be 30, got 31/],
+    ['a hat with the wrong balance', (_p, _m, status, body) => (status === 201 && body.itemId === 'RedHat' ? { status, body: { ...body, balanceAfter: 999 } } : undefined), /buy the Red Hat, priced by the backend: balanceAfter should be 5, got 999/],
+    ['an acknowledge that did nothing', (path, _m, status) => (path.includes('/purchases') ? { status, body: { purchases: [{ transactionId: '00000000-0000-4000-8000-000000000004', itemId: 'RedHat', createdAt: 'now' }] } } : undefined), /the next reconcile no longer lists it: should no longer list the Red Hat purchase/],
+    ['telemetry that claims a drop', (path, _m, status) => (path === '/v1/telemetry/batch' ? { status, body: { accepted: 3, dropped: 1 } } : undefined), /dropped should be 0, got 1/],
+    ['flags that are not an object', (path, _m, status) => (path === '/v1/flags' ? { status, body: { flags: [] } } : undefined), /flags should be an object, got \[\]/],
+    ['an earn of another kind', (_p, _m, status, body) => (status === 201 && body.kind === 'earn' ? { status, body: { ...body, kind: 'refund' } } : undefined), /earn batch 1, 10 Coins: kind should be "earn", got "refund"/],
+    ['an earn of another amount', (_p, _m, status, body) => (status === 201 && body.kind === 'earn' ? { status, body: { ...body, amount: 11 } } : undefined), /earn batch 1, 10 Coins: amount should be 10, got 11/],
+    ['a hat answered as another item', (_p, _m, status, body) => (status === 201 && body.itemId === 'RedHat' ? { status, body: { ...body, itemId: 'GoldCrown' } } : undefined), /buy the Red Hat, priced by the backend: itemId should be "RedHat", got "GoldCrown"/],
+    ['a purchase list that is not a list', (path, _m, status) => (path.includes('/purchases') ? { status, body: { purchases: null } } : undefined), /purchases should be a list, got null/],
     ['a replay without the Idempotent-Replayed header', (path, _m, status, body) => (status === 200 && path === '/v1/economy/transactions' ? { status, body, headers: {} } : undefined), /Idempotent-Replayed header should be "true"/],
     ['a replay with a new transaction id', (path, _m, status, body) => (status === 200 && path === '/v1/economy/transactions' ? { status, body: { ...body, transactionId: 'other' } } : undefined), /transactionId should be/],
     ['an earn with the wrong balanceAfter', (path, _m, status, body) => (status === 201 && body.kind === 'earn' && path === '/v1/economy/transactions' ? { status, body: { ...body, balanceAfter: 999 } } : undefined), /balanceAfter should be 10, got 999/],
@@ -287,7 +367,54 @@ describe('mainDemo', () => {
     expect(code).toBe(0);
     expect(streams.err).toEqual([]);
     expect(streams.out[0]).toBe('ok   backend is ready -> 200 {"status":"ready","checks":{"mysql":"ok","redis":"ok"}}');
-    expect(streams.out.at(-1)).toContain('http://localhost:16686');
+    expect(streams.out.at(-1)).toBe('Done. Open http://localhost:16686, choose the outpost-backend service and the operation POST /v1/economy/transactions, then press Find Traces.');
+
+    const remapped = io();
+    await mainDemo({ OUTPOST_GAME_API_KEY: KEY, OUTPOST_BACKEND_URL: BASE, OUTPOST_JAEGER_URL: 'http://127.0.0.1:26686' }, { fetch: fakeBackend().fetch, ...fakeTime(), ...remapped });
+    expect(remapped.out.at(-1)).toContain('Open http://127.0.0.1:26686,');
+  });
+
+  test('a key with a line break exits 1 and no part of it reaches either stream', async () => {
+    const secret = 'FAKESECRETFAKESECRETFAKESECRETFAKE';
+    const streams = io();
+    const code = await mainDemo({ OUTPOST_GAME_API_KEY: `opk_game-server.${secret}\nTAILPART`, OUTPOST_BACKEND_URL: BASE }, { fetch: fakeBackend().fetch, ...fakeTime(), ...streams });
+    expect(code).toBe(1);
+    const all = [...streams.out, ...streams.err].join('\n');
+    expect(all).toContain('OUTPOST_GAME_API_KEY is not a well-formed key');
+    expect(all).not.toContain(secret);
+    expect(all).not.toContain('TAILPART');
+  });
+
+  test('redacts the key and the access token from any error message', async () => {
+    // A broken backend that echoes the caller's credentials in its error body.
+    const echo: FetchLike = async (url, init) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      if (url.endsWith('/readyz')) return json(200, { status: 'ready', checks: {} });
+      if (url.endsWith('/auth/service-token')) return json(200, { accessToken: 'tok-SECRET-123456', tokenType: 'Bearer', expiresIn: 900, scope: 'game:economy' });
+      return json(500, { error: 'internal', message: `saw ${headers.authorization ?? ''} and ${KEY}` });
+    };
+    const streams = io();
+    expect(await mainDemo({ OUTPOST_GAME_API_KEY: KEY, OUTPOST_BACKEND_URL: BASE }, { fetch: echo, ...fakeTime(), ...streams })).toBe(1);
+    const all = [...streams.out, ...streams.err].join('\n');
+    expect(all).toContain('saw Bearer [redacted] and [redacted]');
+    expect(all).not.toContain('tok-SECRET-123456');
+    expect(all).not.toContain(KEY);
+  });
+
+  test('loads the env file inside the error handling, so a bad .env is one line', async () => {
+    const streams = io();
+    const loadEnv = () => {
+      throw Object.assign(new Error('EISDIR: illegal operation on a directory, read'), { code: 'EISDIR' });
+    };
+    expect(await mainDemo({ OUTPOST_GAME_API_KEY: KEY }, { fetch: fakeBackend().fetch, ...fakeTime(), ...streams, loadEnv })).toBe(1);
+    expect(streams.err).toEqual(['\ndemo failed: could not load the root .env (EISDIR: illegal operation on a directory, read)']);
+
+    const loaded = io();
+    const env: Record<string, string | undefined> = { OUTPOST_BACKEND_URL: BASE };
+    const setKey = () => {
+      env.OUTPOST_GAME_API_KEY = KEY;
+    };
+    expect(await mainDemo(env, { fetch: fakeBackend().fetch, ...fakeTime(), ...loaded, loadEnv: setKey })).toBe(0);
   });
 
   test('exits 1 with one clear line on a config error or a failed step, never printing the key', async () => {
