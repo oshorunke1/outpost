@@ -73,7 +73,8 @@ export function registerHttpMetrics(app: ZodApp, metrics: Metrics): void {
 // host comes from METRICS_HOST, loopback unless set.
 export async function startMetricsServer(registry: Registry, port: number, host: string): Promise<Server> {
   const server = createServer((request, response) => {
-    if (request.method === 'GET' && request.url === '/metrics') {
+    // Compare the path only, so a scrape config that adds params still matches.
+    if (request.method === 'GET' && (request.url ?? '').split('?')[0] === '/metrics') {
       registry.metrics().then(
         (text) => {
           response.writeHead(200, { 'content-type': registry.contentType });

@@ -68,6 +68,9 @@ describe('metrics', () => {
       expect(await ok.text()).toContain('ledger_transactions_total');
       expect((await fetch(`http://127.0.0.1:${port}/auth/login`)).status).toBe(404);
       expect((await fetch(`http://127.0.0.1:${port}/metrics`, { method: 'POST' })).status).toBe(404);
+      // M5: a scrape config with params adds a query string; the path still matches.
+      expect((await fetch(`http://127.0.0.1:${port}/metrics?format=text`)).status).toBe(200);
+      expect((await fetch(`http://127.0.0.1:${port}/metricsx`)).status).toBe(404);
     } finally {
       server.close();
     }
