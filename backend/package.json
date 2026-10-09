@@ -18,7 +18,8 @@
     "migrate": "tsx src/cli/migrate.ts",
     "seed": "tsx src/cli/seed.ts",
     "openapi:export": "tsx scripts/export-openapi.ts",
-    "openapi:check": "tsx scripts/export-openapi.ts --check"
+    "openapi:check": "tsx scripts/export-openapi.ts --check",
+    "demo": "tsx scripts/demo.ts"
   },
   "dependencies": {
     "@fastify/swagger": "9.9.1",
