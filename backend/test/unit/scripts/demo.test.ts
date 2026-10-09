@@ -63,6 +63,17 @@ describe('readDemoConfig', () => {
     }
   });
 
+  test('never echoes a URL that does not parse, since it may still hold a password', () => {
+    let message = '';
+    try {
+      readDemoConfig({ OUTPOST_GAME_API_KEY: KEY, OUTPOST_BACKEND_URL: 'http://user:hunter2-pass@host:99999' });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/OUTPOST_BACKEND_URL must be an http or https URL/);
+    expect(message).not.toContain('hunter2');
+  });
+
   test('reads OUTPOST_JAEGER_URL for the closing hint, default http://localhost:16686', () => {
     expect(readDemoConfig({ OUTPOST_GAME_API_KEY: KEY }).jaegerUrl).toBe('http://localhost:16686');
     expect(readDemoConfig({ OUTPOST_GAME_API_KEY: KEY, OUTPOST_JAEGER_URL: 'http://127.0.0.1:26686/' }).jaegerUrl).toBe('http://127.0.0.1:26686');

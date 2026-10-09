@@ -66,7 +66,9 @@ function readHttpUrl(name: string, raw: string): string {
   const url = URL.canParse(raw) ? new URL(raw) : null;
   if (url && (url.username || url.password)) throw new DemoError(`${name} must not carry a user name or password`);
   if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:') || url.search || url.hash) {
-    throw new DemoError(`${name} must be an http or https URL with no query or fragment (got ${JSON.stringify(raw)})`);
+    // A value that does not parse may still hold a password, so only a parsed URL (checked above) is echoed.
+    const shown = url ? ` (got ${JSON.stringify(raw)})` : '';
+    throw new DemoError(`${name} must be an http or https URL with no query or fragment${shown}`);
   }
   return `${url.origin}${url.pathname}`.replace(/\/+$/, '');
 }
