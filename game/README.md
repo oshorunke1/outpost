@@ -34,6 +34,7 @@ Connect the Rojo plugin in Studio to see the game. No backend and no Docker are 
 | `src/ServerStorage/Classes/Services` | Server singletons with `Init` and `Start` |
 | `src/ReplicatedStorage/Classes/Controllers` | Client singletons with `Init` and `Start` |
 | `src/ServerStorage/Classes/Util` | Server helpers such as NetGuard |
+| `src/ServerStorage/Configs` | Server only settings, such as where the backend lives. Players never receive these |
 | `vendor/` | Third-party code, never edited |
 
 ## Third-party code
