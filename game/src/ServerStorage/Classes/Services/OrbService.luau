@@ -4,6 +4,8 @@
 -- distance itself, and enforces a cooldown before paying anything.
 -- On a ledger server the Coins go to EconomyService, which batches them to the backend ledger.
 -- A player still on the old save gets them in the save, and a paused player gets none.
+-- Every pickup is tracked as orb_collected with the Coins it paid. The OrbSpawnMultiplier flag
+-- makes new orbs come faster or slower, inside the bounds in OrbRules.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -14,6 +16,8 @@ local Packets = require(ReplicatedStorage.Shared.Net.Packets)
 local DataService = require(ServerStorage.Classes.Services.DataService)
 local EconomyService = require(ServerStorage.Classes.Services.EconomyService)
 local NetGuard = require(ServerStorage.Classes.Util.NetGuard)
+local FlagService = require(ServerStorage.Classes.Services.FlagService)
+local TelemetryService = require(ServerStorage.Classes.Services.TelemetryService)
 
 local OrbCount = 12
 local MinSpawnRadius = 8
@@ -94,6 +98,8 @@ local function OnCollect(Player: Player, Payload: { OrbId: number })
 	if Economy == "Ledger" then
 		EconomyService:Earn(Player, OrbRules.CoinsPerOrb)
 	end
+	local Paid = if Economy == "Ledger" or Economy == "Legacy" then OrbRules.CoinsPerOrb else 0
+	TelemetryService:Track("orb_collected", Player.UserId, Paid)
 	DataService:Update(Player, function(Data)
 		if Economy == "Legacy" then
 			Data.Coins = (Data.Coins or 0) + OrbRules.CoinsPerOrb
@@ -101,7 +107,7 @@ local function OnCollect(Player: Player, Payload: { OrbId: number })
 		Data.Stats.OrbsCollected += 1
 	end)
 	DataService:PushSnapshot(Player)
-	task.delay(RespawnSeconds, SpawnOrb)
+	task.delay(OrbRules.RespawnDelay(RespawnSeconds, FlagService:Value("OrbSpawnMultiplier")), SpawnOrb)
 end
 
 function OrbService:Init()

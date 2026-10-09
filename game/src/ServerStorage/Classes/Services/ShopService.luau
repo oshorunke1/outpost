@@ -6,6 +6,8 @@
 -- A player still on the old save buys from the save exactly as in M1. The price comes from
 -- Configs/Shop, and the check and the charge happen inside one Update with no waiting in between,
 -- so two quick buys can never both pay out. A paused player can't buy until they reach a ledger server.
+-- While the ShopEnabled flag is off every purchase answers Unavailable and nothing is charged.
+-- Every answer is tracked as purchase_result.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
 
@@ -14,6 +16,8 @@ local Shop = require(ReplicatedStorage.Shared.Configs.Shop)
 local DataService = require(ServerStorage.Classes.Services.DataService)
 local EconomyService = require(ServerStorage.Classes.Services.EconomyService)
 local NetGuard = require(ServerStorage.Classes.Util.NetGuard)
+local FlagService = require(ServerStorage.Classes.Services.FlagService)
+local TelemetryService = require(ServerStorage.Classes.Services.TelemetryService)
 
 local ShopService = {}
 
@@ -35,11 +39,14 @@ local function OnBuy(Player: Player, Payload: { ItemId: string })
 	local ItemId = Payload.ItemId
 	local Economy = DataService:EconomyFor(Player)
 	local Outcome = "Unavailable"
-	if Economy == "Legacy" then
+	if FlagService:Value("ShopEnabled") == false then
+		Outcome = "Unavailable"
+	elseif Economy == "Legacy" then
 		Outcome = BuyFromSave(Player, ItemId)
 	elseif Economy == "Ledger" then
 		Outcome = EconomyService:Purchase(Player, ItemId).Outcome
 	end
+	TelemetryService:Track("purchase_result", Player.UserId, nil, { outcome = Outcome, itemId = ItemId })
 	NetGuard.SendTo(Player, "Shop.Result", { ItemId = ItemId, Outcome = Outcome })
 	DataService:PushSnapshot(Player)
 end

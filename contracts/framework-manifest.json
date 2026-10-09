@@ -16,10 +16,19 @@
       "hasInit": true,
       "hasStart": true,
       "kind": "service",
-      "lineCount": 307,
+      "lineCount": 309,
       "listens": [],
       "name": "EconomyService",
       "path": "game/src/ServerStorage/Classes/Services/EconomyService.luau"
+    },
+    {
+      "hasInit": true,
+      "hasStart": true,
+      "kind": "service",
+      "lineCount": 58,
+      "listens": [],
+      "name": "FlagService",
+      "path": "game/src/ServerStorage/Classes/Services/FlagService.luau"
     },
     {
       "hasInit": false,
@@ -43,7 +52,7 @@
       "hasInit": true,
       "hasStart": true,
       "kind": "service",
-      "lineCount": 125,
+      "lineCount": 131,
       "listens": [
         "Orb.Collect"
       ],
@@ -54,12 +63,21 @@
       "hasInit": true,
       "hasStart": false,
       "kind": "service",
-      "lineCount": 51,
+      "lineCount": 58,
       "listens": [
         "Shop.Buy"
       ],
       "name": "ShopService",
       "path": "game/src/ServerStorage/Classes/Services/ShopService.luau"
+    },
+    {
+      "hasInit": true,
+      "hasStart": true,
+      "kind": "service",
+      "lineCount": 106,
+      "listens": [],
+      "name": "TelemetryService",
+      "path": "game/src/ServerStorage/Classes/Services/TelemetryService.luau"
     }
   ],
   "packets": [

@@ -10,6 +10,8 @@
 -- StudioLedger lets Studio try the ledger economy on MockTransport. It also keeps every save in
 -- memory while it is on, so a Studio run never touches a real DataStore. It does nothing live.
 -- RequestTimeoutSeconds is how long one HTTP request may take before we stop waiting for it.
+-- ShutdownSeconds is the window the economy and telemetry share when the server closes. Both run
+-- at the same time inside it, and it leaves room in the 30 seconds Roblox gives BindToClose.
 export type Backend = {
 	Enabled: boolean,
 	BaseUrl: string,
@@ -17,6 +19,7 @@ export type Backend = {
 	HttpBudgetPerMinute: number,
 	HttpBurst: number,
 	RequestTimeoutSeconds: number,
+	ShutdownSeconds: number,
 	StudioLedger: boolean,
 }
 
@@ -27,6 +30,7 @@ local Backend: Backend = {
 	HttpBudgetPerMinute = 400,
 	HttpBurst = 50,
 	RequestTimeoutSeconds = 15,
+	ShutdownSeconds = 20,
 	StudioLedger = false,
 }
 

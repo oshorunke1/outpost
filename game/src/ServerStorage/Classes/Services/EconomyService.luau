@@ -22,6 +22,7 @@ local EconomyCore = require(Shared.Logic.Economy.EconomyCore)
 local LegacyCredit = require(Shared.Logic.Economy.LegacyCredit)
 local PurchaseGuard = require(Shared.Logic.Economy.PurchaseGuard)
 local ItemId = require(Shared.Enums.ItemId)
+local BackendConfig = require(ServerStorage.Configs.Backend)
 local Backend = require(ServerStorage.Classes.Util.Backend)
 local DataService = require(ServerStorage.Classes.Services.DataService)
 
@@ -30,8 +31,9 @@ local BatchCoins = 200
 local BatchAgeSeconds = 30
 -- How long the legacy credit waits for the save that holds LegacyCoins to be written.
 local SaveNowSeconds = 30
--- Roblox gives BindToClose about 30 seconds, so every batch gets this long, all at once.
-local ShutdownSeconds = 20
+-- Roblox gives BindToClose about 30 seconds. Every batch goes at once inside the window the
+-- economy shares with telemetry, see Configs/Backend.
+local ShutdownSeconds = BackendConfig.ShutdownSeconds
 -- After a player leaves, Coins held for a join that never landed wait this long before they are given up.
 local LeftJoinSeconds = 600
 

@@ -42,6 +42,11 @@ Describe("Configs/Backend", function()
 		Expect(#BackendConfig.SecretName > 0).ToBe(true)
 	end)
 
+	It("the shutdown window the economy and telemetry share leaves room in the 30 seconds Roblox gives", function()
+		Expect(BackendConfig.ShutdownSeconds > 0).ToBe(true)
+		Expect(BackendConfig.ShutdownSeconds <= 25).ToBe(true)
+	end)
+
 	It("one slow request still fits inside the time a token trade may take before it counts as stuck", function()
 		local Seconds = BackendConfig.RequestTimeoutSeconds
 		Expect(Seconds > 0).ToBe(true)
