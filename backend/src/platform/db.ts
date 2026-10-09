@@ -36,6 +36,12 @@ export async function pingDb(db: Db): Promise<void> {
   }
 }
 
+// The readiness probe. The query timeout makes mysql2 give the connection back when MySQL stops
+// answering, so repeated probes against a hung database never pin the whole pool.
+export async function probeDb(db: Db, timeoutMs: number): Promise<void> {
+  await db.query({ sql: 'SELECT 1', timeout: timeoutMs });
+}
+
 const RETRYABLE = new Set(['ER_LOCK_DEADLOCK', 'ER_LOCK_WAIT_TIMEOUT']);
 
 function codeOf(error: unknown): unknown {

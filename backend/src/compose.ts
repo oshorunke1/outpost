@@ -26,8 +26,9 @@ import { createMysqlPlayersService } from './modules/players/playersService.js';
 import { createRedisTelemetryProducer } from './modules/telemetry/producer.js';
 import type { Clock } from './platform/clock.js';
 import type { AppConfig } from './platform/config.js';
+import { probeDb } from './platform/db.js';
 import type { Db, TransactionLogger } from './platform/db.js';
-import { createHealthChecks } from './platform/health.js';
+import { PROBE_TIMEOUT_MS, createHealthChecks } from './platform/health.js';
 import { loggerOptions } from './platform/logger.js';
 import type { Metrics } from './platform/metrics.js';
 import type { Redis } from './platform/redis.js';
@@ -114,6 +115,6 @@ export async function createAppDeps(config: AppConfig, infra: Infra, options: Co
     flags: createMysqlFlagsService(db, clock, { logger: options.logger ?? baseLogger.child({ module: 'flags' }) }),
     metrics,
     // Each probe is bounded at a second, so a hung pool or a Redis that never answers is a fail, not a hang.
-    health: createHealthChecks({ mysql: () => db.query('SELECT 1'), redis: () => redis.ping() }),
+    health: createHealthChecks({ mysql: () => probeDb(db, PROBE_TIMEOUT_MS), redis: () => redis.ping() }),
   };
 }
