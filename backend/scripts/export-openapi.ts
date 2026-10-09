@@ -5,7 +5,13 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkContract, renderContract } from './openapiContract.js';
 
-const target = fileURLToPath(new URL('../../contracts/openapi.yaml', import.meta.url));
+// --target <path> points at another file. The tests use it so they never touch the real contract.
+const targetFlag = process.argv.indexOf('--target');
+const target = targetFlag === -1 ? fileURLToPath(new URL('../../contracts/openapi.yaml', import.meta.url)) : process.argv[targetFlag + 1];
+if (!target) {
+  console.error('--target needs a file path');
+  process.exit(2);
+}
 const yaml = await renderContract();
 
 if (process.argv.includes('--check')) {

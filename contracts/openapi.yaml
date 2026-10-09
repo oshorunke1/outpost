@@ -19,7 +19,435 @@ components:
       in: header
       name: Authorization
       description: ApiKey opk_<clientId>.<secret>
-  schemas: {}
+  schemas:
+    EarnRequestInput:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum:
+            - earn
+        userId:
+          type: integer
+          minimum: 0
+          exclusiveMinimum: true
+          maximum: 9007199254740991
+        amount:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        reason:
+          type: string
+          enum:
+            - orbs
+      required:
+        - kind
+        - userId
+        - amount
+        - reason
+      additionalProperties: false
+    PurchaseRequestInput:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum:
+            - purchase
+        userId:
+          type: integer
+          minimum: 0
+          exclusiveMinimum: true
+          maximum: 9007199254740991
+        itemId:
+          type: string
+          enum:
+            - RedHat
+            - GoldCrown
+      required:
+        - kind
+        - userId
+        - itemId
+      additionalProperties: false
+    TransactionRequestInput:
+      oneOf:
+        - $ref: "#/components/schemas/EarnRequestInput"
+        - $ref: "#/components/schemas/PurchaseRequestInput"
+      discriminator:
+        propertyName: kind
+        mapping:
+          earn: "#/components/schemas/EarnRequestInput"
+          purchase: "#/components/schemas/PurchaseRequestInput"
+    LoginRequestInput:
+      type: object
+      properties:
+        email:
+          type: string
+          minLength: 3
+          maxLength: 254
+        password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+      required:
+        - email
+        - password
+      additionalProperties: false
+    RefreshRequestInput:
+      type: object
+      properties:
+        refreshToken:
+          type: string
+          pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[A-Za-z0-9_-]{43}$
+      required:
+        - refreshToken
+      additionalProperties: false
+    TelemetryBatchInput:
+      type: object
+      properties:
+        events:
+          minItems: 1
+          maxItems: 500
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                enum:
+                  - player_join
+                  - player_leave
+                  - orb_collected
+                  - earn_flush
+                  - purchase_result
+                  - breaker_state
+                  - netguard_drop
+              ts:
+                type: integer
+                minimum: 0
+                exclusiveMinimum: true
+                maximum: 9007199254740991
+              userId:
+                type: integer
+                minimum: 0
+                exclusiveMinimum: true
+                maximum: 9007199254740991
+              value:
+                type: number
+                minimum: -1000000000
+                maximum: 1000000000
+              dims:
+                type: object
+                properties:
+                  outcome:
+                    type: string
+                    enum:
+                      - Granted
+                      - AlreadyOwned
+                      - TooPoor
+                      - UnknownItem
+                      - Unavailable
+                  itemId:
+                    type: string
+                    enum:
+                      - RedHat
+                      - GoldCrown
+                  state:
+                    type: string
+                    enum:
+                      - Closed
+                      - Open
+                      - HalfOpen
+                  packet:
+                    type: string
+                    enum:
+                      - Orb.Collect
+                      - Profile.RequestSnapshot
+                      - Profile.Snapshot
+                      - Shop.Buy
+                      - Shop.Result
+                      - Unknown
+                  reason:
+                    type: string
+                    enum:
+                      - UnknownPacket
+                      - WrongDirection
+                      - NoHandler
+                      - TooManyArguments
+                      - Throttled
+                      - BadPayload
+                additionalProperties: false
+            required:
+              - name
+              - ts
+            additionalProperties: false
+      required:
+        - events
+      additionalProperties: false
+    ErrorBody:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+      required:
+        - error
+        - message
+      additionalProperties: false
+    TransactionResult:
+      type: object
+      properties:
+        transactionId:
+          type: string
+          format: uuid
+          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+        kind:
+          type: string
+          enum:
+            - earn
+            - purchase
+            - refund
+        userId:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        amount:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        balanceAfter:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        itemId:
+          nullable: true
+          type: string
+          enum:
+            - RedHat
+            - GoldCrown
+        createdAt:
+          type: string
+        replayed:
+          type: boolean
+      required:
+        - transactionId
+        - kind
+        - userId
+        - amount
+        - balanceAfter
+        - itemId
+        - createdAt
+        - replayed
+      additionalProperties: false
+    Purchase:
+      type: object
+      properties:
+        transactionId:
+          type: string
+          format: uuid
+          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+        itemId:
+          type: string
+          enum:
+            - RedHat
+            - GoldCrown
+        createdAt:
+          type: string
+      required:
+        - transactionId
+        - itemId
+        - createdAt
+      additionalProperties: false
+    PurchaseList:
+      type: object
+      properties:
+        purchases:
+          type: array
+          items:
+            $ref: "#/components/schemas/Purchase"
+      required:
+        - purchases
+      additionalProperties: false
+    Flags:
+      type: object
+      properties:
+        flags:
+          type: object
+          additionalProperties:
+            anyOf:
+              - type: boolean
+              - type: number
+              - type: string
+      required:
+        - flags
+      additionalProperties: false
+    TokenPair:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        tokenType:
+          type: string
+          enum:
+            - Bearer
+        expiresIn:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+      required:
+        - accessToken
+        - refreshToken
+        - tokenType
+        - expiresIn
+      additionalProperties: false
+    Session:
+      type: object
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+        createdAt:
+          type: string
+        userAgent:
+          type: string
+        ip:
+          type: string
+        current:
+          type: boolean
+      required:
+        - sessionId
+        - createdAt
+        - userAgent
+        - ip
+        - current
+      additionalProperties: false
+    SessionList:
+      type: object
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Session"
+      required:
+        - sessions
+      additionalProperties: false
+    Jwk:
+      type: object
+      properties:
+        kty:
+          type: string
+        n:
+          type: string
+        e:
+          type: string
+        kid:
+          type: string
+        alg:
+          type: string
+        use:
+          type: string
+      required:
+        - kty
+        - n
+        - e
+        - kid
+        - alg
+        - use
+      additionalProperties: false
+    JwkSet:
+      type: object
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/Jwk"
+      required:
+        - keys
+      additionalProperties: false
+    ServiceToken:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        tokenType:
+          type: string
+          enum:
+            - Bearer
+        expiresIn:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        scope:
+          type: string
+      required:
+        - accessToken
+        - tokenType
+        - expiresIn
+        - scope
+      additionalProperties: false
+    Wallet:
+      type: object
+      properties:
+        userId:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        balance:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+      required:
+        - userId
+        - balance
+      additionalProperties: false
+    TelemetryAccepted:
+      type: object
+      properties:
+        accepted:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+        dropped:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+      required:
+        - accepted
+        - dropped
+      additionalProperties: false
+    Readiness:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - ready
+            - not_ready
+            - draining
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+            enum:
+              - ok
+              - fail
+      required:
+        - status
+        - checks
+      additionalProperties: false
+    Health:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+      required:
+        - status
+      additionalProperties: false
 paths:
   /healthz:
     get:
@@ -30,19 +458,11 @@ paths:
       security: []
       responses:
         "200":
-          description: Default Response
+          description: OK
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    enum:
-                      - ok
-                required:
-                  - status
-                additionalProperties: false
+                $ref: "#/components/schemas/Health"
   /readyz:
     get:
       operationId: getReadiness
@@ -52,53 +472,17 @@ paths:
       security: []
       responses:
         "200":
-          description: Default Response
+          description: OK
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    enum:
-                      - ready
-                      - not_ready
-                      - draining
-                  checks:
-                    type: object
-                    additionalProperties:
-                      type: string
-                      enum:
-                        - ok
-                        - fail
-                required:
-                  - status
-                  - checks
-                additionalProperties: false
+                $ref: "#/components/schemas/Readiness"
         "503":
-          description: Default Response
+          description: A dependency is unavailable, retry later
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    enum:
-                      - ready
-                      - not_ready
-                      - draining
-                  checks:
-                    type: object
-                    additionalProperties:
-                      type: string
-                      enum:
-                        - ok
-                        - fail
-                required:
-                  - status
-                  - checks
-                additionalProperties: false
+                $ref: "#/components/schemas/Readiness"
   /auth/login:
     post:
       operationId: login
@@ -110,107 +494,52 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                email:
-                  type: string
-                  minLength: 3
-                  maxLength: 254
-                password:
-                  type: string
-                  minLength: 1
-                  maxLength: 1024
-              required:
-                - email
-                - password
-              additionalProperties: false
+              $ref: "#/components/schemas/LoginRequestInput"
       security: []
       responses:
         "200":
-          description: Default Response
+          description: OK
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  accessToken:
-                    type: string
-                  refreshToken:
-                    type: string
-                  tokenType:
-                    type: string
-                    enum:
-                      - Bearer
-                  expiresIn:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                required:
-                  - accessToken
-                  - refreshToken
-                  - tokenType
-                  - expiresIn
-                additionalProperties: false
+                $ref: "#/components/schemas/TokenPair"
         "400":
-          description: Default Response
+          description: The request is malformed or fails validation
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "401":
-          description: Default Response
+          description: Missing or invalid credentials
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
+        "413":
+          description: The body is over the size limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
         "429":
-          description: Default Response
+          description: Rate limited, wait for Retry-After
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
+          headers:
+            retry-after:
+              description: Whole seconds to wait before retrying
+              required: true
+              schema:
+                type: integer
+                minimum: 0
         "503":
-          description: Default Response
+          description: A dependency is unavailable, retry later
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
   /auth/token/refresh:
     post:
       operationId: refreshToken
@@ -222,101 +551,52 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                refreshToken:
-                  type: string
-                  pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[A-Za-z0-9_-]{43}$
-              required:
-                - refreshToken
-              additionalProperties: false
+              $ref: "#/components/schemas/RefreshRequestInput"
       security: []
       responses:
         "200":
-          description: Default Response
+          description: OK
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  accessToken:
-                    type: string
-                  refreshToken:
-                    type: string
-                  tokenType:
-                    type: string
-                    enum:
-                      - Bearer
-                  expiresIn:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                required:
-                  - accessToken
-                  - refreshToken
-                  - tokenType
-                  - expiresIn
-                additionalProperties: false
+                $ref: "#/components/schemas/TokenPair"
         "400":
-          description: Default Response
+          description: The request is malformed or fails validation
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "401":
-          description: Default Response
+          description: Missing or invalid credentials
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
+        "413":
+          description: The body is over the size limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
         "429":
-          description: Default Response
+          description: Rate limited, wait for Retry-After
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
+          headers:
+            retry-after:
+              description: Whole seconds to wait before retrying
+              required: true
+              schema:
+                type: integer
+                minimum: 0
         "503":
-          description: Default Response
+          description: A dependency is unavailable, retry later
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
   /auth/logout:
     post:
       operationId: logout
@@ -327,44 +607,19 @@ paths:
         - bearer: []
       responses:
         "204":
-          description: Default Response
-          content:
-            application/json:
-              schema:
-                type: string
-                nullable: true
-                enum:
-                  - null
+          description: Done, no body
         "401":
-          description: Default Response
+          description: Missing or invalid credentials
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "503":
-          description: Default Response
+          description: A dependency is unavailable, retry later
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
   /auth/logout/all:
     post:
       operationId: logoutAll
@@ -374,44 +629,19 @@ paths:
       security: *a1
       responses:
         "204":
-          description: Default Response
-          content:
-            application/json:
-              schema:
-                type: string
-                nullable: true
-                enum:
-                  - null
+          description: Done, no body
         "401":
-          description: Default Response
+          description: Missing or invalid credentials
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "503":
-          description: Default Response
+          description: A dependency is unavailable, retry later
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
   /auth/sessions:
     get:
       operationId: listSessions
@@ -421,69 +651,23 @@ paths:
       security: *a1
       responses:
         "200":
-          description: Default Response
+          description: OK
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  sessions:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        sessionId:
-                          type: string
-                          format: uuid
-                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
-                        createdAt:
-                          type: string
-                        userAgent:
-                          type: string
-                        ip:
-                          type: string
-                        current:
-                          type: boolean
-                      required:
-                        - sessionId
-                        - createdAt
-                        - userAgent
-                        - ip
-                        - current
-                      additionalProperties: false
-                required:
-                  - sessions
-                additionalProperties: false
+                $ref: "#/components/schemas/SessionList"
         "401":
-          description: Default Response
+          description: Missing or invalid credentials
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "503":
-          description: Default Response
+          description: A dependency is unavailable, retry later
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
   /auth/sessions/{id}:
     delete:
       operationId: revokeSession
@@ -501,74 +685,31 @@ paths:
       security: *a1
       responses:
         "204":
-          description: Default Response
-          content:
-            application/json:
-              schema:
-                type: string
-                nullable: true
-                enum:
-                  - null
+          description: Done, no body
         "400":
-          description: Default Response
+          description: The request is malformed or fails validation
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "401":
-          description: Default Response
+          description: Missing or invalid credentials
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "404":
-          description: Default Response
+          description: Not found
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "503":
-          description: Default Response
+          description: A dependency is unavailable, retry later
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
   /.well-known/jwks.json:
     get:
       operationId: getJwks
@@ -578,40 +719,11 @@ paths:
       security: []
       responses:
         "200":
-          description: Default Response
+          description: OK
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  keys:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        kty:
-                          type: string
-                        n:
-                          type: string
-                        e:
-                          type: string
-                        kid:
-                          type: string
-                        alg:
-                          type: string
-                        use:
-                          type: string
-                      required:
-                        - kty
-                        - n
-                        - e
-                        - kid
-                        - alg
-                        - use
-                      additionalProperties: false
-                required:
-                  - keys
-                additionalProperties: false
+                $ref: "#/components/schemas/JwkSet"
   /auth/service-token:
     post:
       operationId: exchangeServiceToken
@@ -623,75 +735,36 @@ paths:
         - apiKey: []
       responses:
         "200":
-          description: Default Response
+          description: OK
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  accessToken:
-                    type: string
-                  tokenType:
-                    type: string
-                    enum:
-                      - Bearer
-                  expiresIn:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                  scope:
-                    type: string
-                required:
-                  - accessToken
-                  - tokenType
-                  - expiresIn
-                  - scope
-                additionalProperties: false
+                $ref: "#/components/schemas/ServiceToken"
         "401":
-          description: Default Response
+          description: Missing or invalid credentials
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "429":
-          description: Default Response
+          description: Rate limited, wait for Retry-After
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
+          headers:
+            retry-after:
+              description: Whole seconds to wait before retrying
+              required: true
+              schema:
+                type: integer
+                minimum: 0
         "503":
-          description: Default Response
+          description: A dependency is unavailable, retry later
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
   /v1/players/{userId}/sessions:
     post:
       operationId: startPlayerSession
@@ -709,99 +782,54 @@ paths:
         - bearer: []
       responses:
         "200":
-          description: Default Response
+          description: OK
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  userId:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                  balance:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                required:
-                  - userId
-                  - balance
-                additionalProperties: false
+                $ref: "#/components/schemas/Wallet"
         "400":
-          description: Default Response
+          description: The request is malformed or fails validation
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "401":
-          description: Default Response
+          description: Missing or invalid credentials
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "403":
-          description: Default Response
+          description: The token lacks the scope this route needs
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "404":
-          description: Default Response
+          description: Not found
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "429":
-          description: Default Response
+          description: Rate limited, wait for Retry-After
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
+          headers:
+            retry-after:
+              description: Whole seconds to wait before retrying
+              required: true
+              schema:
+                type: integer
+                minimum: 0
+        "503":
+          description: A dependency is unavailable, retry later
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
   /v1/players/{userId}/sessions/end:
     post:
       operationId: endPlayerSession
@@ -818,89 +846,50 @@ paths:
       security: *a2
       responses:
         "204":
-          description: Default Response
-          content:
-            application/json:
-              schema:
-                type: string
-                nullable: true
-                enum:
-                  - null
+          description: Done, no body
         "400":
-          description: Default Response
+          description: The request is malformed or fails validation
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "401":
-          description: Default Response
+          description: Missing or invalid credentials
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "403":
-          description: Default Response
+          description: The token lacks the scope this route needs
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "404":
-          description: Default Response
+          description: Not found
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "429":
-          description: Default Response
+          description: Rate limited, wait for Retry-After
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
+          headers:
+            retry-after:
+              description: Whole seconds to wait before retrying
+              required: true
+              schema:
+                type: integer
+                minimum: 0
+        "503":
+          description: A dependency is unavailable, retry later
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
   /v1/players/{userId}/wallet:
     get:
       operationId: getWallet
@@ -917,99 +906,54 @@ paths:
       security: *a2
       responses:
         "200":
-          description: Default Response
+          description: OK
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  userId:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                  balance:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                required:
-                  - userId
-                  - balance
-                additionalProperties: false
+                $ref: "#/components/schemas/Wallet"
         "400":
-          description: Default Response
+          description: The request is malformed or fails validation
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "401":
-          description: Default Response
+          description: Missing or invalid credentials
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "403":
-          description: Default Response
+          description: The token lacks the scope this route needs
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "404":
-          description: Default Response
+          description: Not found
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "429":
-          description: Default Response
+          description: Rate limited, wait for Retry-After
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
+          headers:
+            retry-after:
+              description: Whole seconds to wait before retrying
+              required: true
+              schema:
+                type: integer
+                minimum: 0
+        "503":
+          description: A dependency is unavailable, retry later
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
   /v1/economy/transactions:
     post:
       operationId: submitTransaction
@@ -1022,53 +966,7 @@ paths:
         content:
           application/json:
             schema:
-              oneOf:
-                - type: object
-                  properties:
-                    kind:
-                      type: string
-                      enum:
-                        - earn
-                    userId:
-                      type: integer
-                      minimum: 0
-                      exclusiveMinimum: true
-                      maximum: 9007199254740991
-                    amount:
-                      type: integer
-                      minimum: 1
-                      maximum: 1000
-                    reason:
-                      type: string
-                      enum:
-                        - orbs
-                  required:
-                    - kind
-                    - userId
-                    - amount
-                    - reason
-                  additionalProperties: false
-                - type: object
-                  properties:
-                    kind:
-                      type: string
-                      enum:
-                        - purchase
-                    userId:
-                      type: integer
-                      minimum: 0
-                      exclusiveMinimum: true
-                      maximum: 9007199254740991
-                    itemId:
-                      type: string
-                      enum:
-                        - RedHat
-                        - GoldCrown
-                  required:
-                    - kind
-                    - userId
-                    - itemId
-                  additionalProperties: false
+              $ref: "#/components/schemas/TransactionRequestInput"
       parameters:
         - schema:
             type: string
@@ -1080,223 +978,94 @@ paths:
         - bearer: []
       responses:
         "200":
-          description: Default Response
+          description: OK
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  transactionId:
-                    type: string
-                    format: uuid
-                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
-                  kind:
-                    type: string
-                    enum:
-                      - earn
-                      - purchase
-                      - refund
-                  userId:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                  amount:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                  balanceAfter:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                  itemId:
-                    nullable: true
-                    type: string
-                    enum:
-                      - RedHat
-                      - GoldCrown
-                  createdAt:
-                    type: string
-                  replayed:
-                    type: boolean
-                required:
-                  - transactionId
-                  - kind
-                  - userId
-                  - amount
-                  - balanceAfter
-                  - itemId
-                  - createdAt
-                  - replayed
-                additionalProperties: false
+                $ref: "#/components/schemas/TransactionResult"
+          headers:
+            idempotent-replayed:
+              description: Present when this answer is the stored result of an earlier request
+                with the same Idempotency-Key
+              required: true
+              schema:
+                type: string
+                enum:
+                  - "true"
         "201":
-          description: Default Response
+          description: Created
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  transactionId:
-                    type: string
-                    format: uuid
-                    pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
-                  kind:
-                    type: string
-                    enum:
-                      - earn
-                      - purchase
-                      - refund
-                  userId:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                  amount:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                  balanceAfter:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                  itemId:
-                    nullable: true
-                    type: string
-                    enum:
-                      - RedHat
-                      - GoldCrown
-                  createdAt:
-                    type: string
-                  replayed:
-                    type: boolean
-                required:
-                  - transactionId
-                  - kind
-                  - userId
-                  - amount
-                  - balanceAfter
-                  - itemId
-                  - createdAt
-                  - replayed
-                additionalProperties: false
+                $ref: "#/components/schemas/TransactionResult"
         "400":
-          description: Default Response
+          description: The request is malformed or fails validation
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "401":
-          description: Default Response
+          description: Missing or invalid credentials
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "403":
-          description: Default Response
+          description: The token lacks the scope this route needs
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "404":
-          description: Default Response
+          description: Not found
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "409":
-          description: Default Response
+          description: Conflicts with an earlier request
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
+        "413":
+          description: The body is over the size limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
         "422":
-          description: Default Response
+          description: Refused by a business rule, for example not enough Coins
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "429":
-          description: Default Response
+          description: Rate limited, wait for Retry-After
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
+          headers:
+            retry-after:
+              description: Whole seconds to wait before retrying
+              required: true
+              schema:
+                type: integer
+                minimum: 0
         "503":
-          description: Default Response
+          description: A dependency is unavailable, retry later
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
+          headers:
+            retry-after:
+              description: Whole seconds to wait before retrying
+              required: false
+              schema:
+                type: integer
+                minimum: 0
   /v1/economy/transactions/{id}/fulfilled:
     post:
       operationId: markPurchaseFulfilled
@@ -1315,134 +1084,50 @@ paths:
       security: *a3
       responses:
         "204":
-          description: Default Response
-          content:
-            application/json:
-              schema:
-                type: string
-                nullable: true
-                enum:
-                  - null
+          description: Done, no body
         "400":
-          description: Default Response
+          description: The request is malformed or fails validation
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "401":
-          description: Default Response
+          description: Missing or invalid credentials
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "403":
-          description: Default Response
+          description: The token lacks the scope this route needs
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "404":
-          description: Default Response
+          description: Not found
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
-        "409":
-          description: Default Response
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
-        "422":
-          description: Default Response
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "429":
-          description: Default Response
+          description: Rate limited, wait for Retry-After
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
+          headers:
+            retry-after:
+              description: Whole seconds to wait before retrying
+              required: true
+              schema:
+                type: integer
+                minimum: 0
         "503":
-          description: Default Response
+          description: A dependency is unavailable, retry later
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
   /v1/players/{userId}/purchases:
     get:
       operationId: listUnfulfilledPurchases
@@ -1466,156 +1151,48 @@ paths:
       security: *a3
       responses:
         "200":
-          description: Default Response
+          description: OK
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  purchases:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        transactionId:
-                          type: string
-                          format: uuid
-                          pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
-                        itemId:
-                          type: string
-                          enum:
-                            - RedHat
-                            - GoldCrown
-                        createdAt:
-                          type: string
-                      required:
-                        - transactionId
-                        - itemId
-                        - createdAt
-                      additionalProperties: false
-                required:
-                  - purchases
-                additionalProperties: false
+                $ref: "#/components/schemas/PurchaseList"
         "400":
-          description: Default Response
+          description: The request is malformed or fails validation
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "401":
-          description: Default Response
+          description: Missing or invalid credentials
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "403":
-          description: Default Response
+          description: The token lacks the scope this route needs
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
-        "404":
-          description: Default Response
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
-        "409":
-          description: Default Response
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
-        "422":
-          description: Default Response
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "429":
-          description: Default Response
+          description: Rate limited, wait for Retry-After
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
+          headers:
+            retry-after:
+              description: Whole seconds to wait before retrying
+              required: true
+              schema:
+                type: integer
+                minimum: 0
         "503":
-          description: Default Response
+          description: A dependency is unavailable, retry later
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
   /v1/telemetry/batch:
     post:
       operationId: submitTelemetryBatch
@@ -1628,199 +1205,59 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                events:
-                  minItems: 1
-                  maxItems: 500
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      name:
-                        type: string
-                        enum:
-                          - player_join
-                          - player_leave
-                          - orb_collected
-                          - earn_flush
-                          - purchase_result
-                          - breaker_state
-                          - netguard_drop
-                      ts:
-                        type: integer
-                        minimum: 0
-                        exclusiveMinimum: true
-                        maximum: 9007199254740991
-                      userId:
-                        type: integer
-                        minimum: 0
-                        exclusiveMinimum: true
-                        maximum: 9007199254740991
-                      value:
-                        type: number
-                        minimum: -1000000000
-                        maximum: 1000000000
-                      dims:
-                        type: object
-                        properties:
-                          outcome:
-                            type: string
-                            enum:
-                              - Granted
-                              - AlreadyOwned
-                              - TooPoor
-                              - UnknownItem
-                              - Unavailable
-                          itemId:
-                            type: string
-                            enum:
-                              - RedHat
-                              - GoldCrown
-                          state:
-                            type: string
-                            enum:
-                              - Closed
-                              - Open
-                              - HalfOpen
-                          packet:
-                            type: string
-                            enum:
-                              - Orb.Collect
-                              - Profile.RequestSnapshot
-                              - Profile.Snapshot
-                              - Shop.Buy
-                              - Shop.Result
-                              - Unknown
-                          reason:
-                            type: string
-                            enum:
-                              - UnknownPacket
-                              - WrongDirection
-                              - NoHandler
-                              - TooManyArguments
-                              - Throttled
-                              - BadPayload
-                        additionalProperties: false
-                    required:
-                      - name
-                      - ts
-                    additionalProperties: false
-              required:
-                - events
-              additionalProperties: false
+              $ref: "#/components/schemas/TelemetryBatchInput"
       security:
         - bearer: []
       responses:
         "202":
-          description: Default Response
+          description: Accepted
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  accepted:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                  dropped:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                required:
-                  - accepted
-                  - dropped
-                additionalProperties: false
+                $ref: "#/components/schemas/TelemetryAccepted"
         "400":
-          description: Default Response
+          description: The request is malformed or fails validation
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "401":
-          description: Default Response
+          description: Missing or invalid credentials
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "403":
-          description: Default Response
+          description: The token lacks the scope this route needs
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "413":
-          description: Default Response
+          description: The body is over the size limit
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "429":
-          description: Default Response
+          description: Rate limited, wait for Retry-After
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
+          headers:
+            retry-after:
+              description: Whole seconds to wait before retrying
+              required: true
+              schema:
+                type: integer
+                minimum: 0
         "503":
-          description: Default Response
+          description: A dependency is unavailable, retry later
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
   /v1/flags:
     get:
       operationId: listFlags
@@ -1831,82 +1268,49 @@ paths:
         - bearer: []
       responses:
         "200":
-          description: Default Response
+          description: OK
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  flags:
-                    type: object
-                    additionalProperties:
-                      anyOf:
-                        - type: boolean
-                        - type: number
-                        - type: string
-                required:
-                  - flags
-                additionalProperties: false
+                $ref: "#/components/schemas/Flags"
         "401":
-          description: Default Response
+          description: Missing or invalid credentials
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "403":
-          description: Default Response
+          description: The token lacks the scope this route needs
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
         "429":
-          description: Default Response
+          description: Rate limited, wait for Retry-After
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
+          headers:
+            retry-after:
+              description: Whole seconds to wait before retrying
+              required: true
+              schema:
+                type: integer
+                minimum: 0
         "503":
-          description: Default Response
+          description: A dependency is unavailable, retry later
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-                additionalProperties: false
+                $ref: "#/components/schemas/ErrorBody"
+          headers:
+            retry-after:
+              description: Whole seconds to wait before retrying
+              required: false
+              schema:
+                type: integer
+                minimum: 0
 servers:
   - url: http://localhost:3000
     description: Local Compose stack
