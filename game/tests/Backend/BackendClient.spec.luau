@@ -632,4 +632,41 @@ Describe("BackendClient deadline and the shared exchange", function()
 	end)
 end)
 
+Describe("BackendClient time left for each request", function()
+	It("tells the transport how long the call has left, so a request never outlives the deadline", function()
+		local Rig = MakeRig({ TokenReply("tok-1"), Reply(503), Reply(200, {}) })
+		Rig.Client:Send(Requests.Wallet(1001), { DeadlineSeconds = 8 })
+		Expect(#Rig.Calls).ToBe(3)
+		-- The trade gets the smaller of the call's deadline and its own cap.
+		Expect(Rig.Calls[1].TimeoutSeconds).ToBe(8)
+		Expect(Rig.Calls[2].TimeoutSeconds).ToBe(8)
+		-- After the backoff wait, the retry has that much less time.
+		Expect(Rig.Slept[1] > 0).ToBe(true)
+		Expect(Rig.Calls[3].TimeoutSeconds).ToBe(8 - Rig.Slept[1])
+	end)
+
+	It("the token trade never gets more than its own cap", function()
+		local Rig = MakeRig({ TokenReply("tok-1"), Reply(200, {}) })
+		Rig.Client:Send(Requests.Wallet(1001))
+		Expect(Rig.Calls[1].TimeoutSeconds).ToBe(BackendClient.ExchangeDeadlineSeconds)
+		Expect(Rig.Calls[2].TimeoutSeconds).ToBe(BackendClient.DefaultDeadlineSeconds)
+	end)
+
+	It("time spent on the token trade comes off the request that follows", function()
+		local Advance: ((Seconds: number) -> ())? = nil
+		local Rig = MakeRig({
+			function(_Request: TransportRequest): Response
+				if Advance then
+					Advance(3)
+				end
+				return TokenReply("tok-1")
+			end,
+			Reply(200, {}),
+		})
+		Advance = Rig.Advance
+		Rig.Client:Send(Requests.Wallet(1001), { DeadlineSeconds = 8 })
+		Expect(Rig.Calls[2].TimeoutSeconds).ToBe(5)
+	end)
+end)
+
 return nil

@@ -148,6 +148,23 @@ Describe("HttpCall.Race", function()
 	end)
 end)
 
+Describe("HttpCall.TimeoutFor", function()
+	It("waits the configured time when the call has longer than that left", function()
+		Expect(HttpCall.TimeoutFor(15, 120)).ToBe(15)
+	end)
+
+	It("waits only as long as the call has left when that is shorter", function()
+		Expect(HttpCall.TimeoutFor(15, 6.5)).ToBe(6.5)
+		Expect(HttpCall.TimeoutFor(15, 0)).ToBe(0)
+		Expect(HttpCall.TimeoutFor(15, -2)).ToBe(-2)
+	end)
+
+	It("uses the configured time when the caller gave no deadline or a broken one", function()
+		Expect(HttpCall.TimeoutFor(15, nil)).ToBe(15)
+		Expect(HttpCall.TimeoutFor(15, 0 / 0)).ToBe(15)
+	end)
+end)
+
 Describe("HttpCall.ToOptions", function()
 	It("copies the request and encodes a body", function()
 		local Secret = newproxy(false)

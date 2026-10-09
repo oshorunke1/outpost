@@ -9,7 +9,14 @@
 
 export type Mode = "Mock" | "Roblox" | "Offline"
 export type Response = { Ok: boolean, Status: number, Body: any, Headers: { [string]: string } }
-export type TransportRequest = { Method: string, Url: string, Headers: { [string]: any }, Body: any? }
+-- Copies of the types in BackendClient, because Shared modules require nothing. Change them together.
+export type TransportRequest = {
+	Method: string,
+	Url: string,
+	Headers: { [string]: any },
+	Body: any?,
+	TimeoutSeconds: number?,
+}
 
 local BackendMode = {}
 

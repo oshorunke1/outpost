@@ -9,7 +9,14 @@
 -- Nothing here touches game. The scheduler and the JSON functions are passed in.
 
 export type Response = { Ok: boolean, Status: number, Body: any, Headers: { [string]: string } }
-export type TransportRequest = { Method: string, Url: string, Headers: { [string]: any }, Body: any? }
+-- Copies of the types in BackendClient, because Shared modules require nothing. Change them together.
+export type TransportRequest = {
+	Method: string,
+	Url: string,
+	Headers: { [string]: any },
+	Body: any?,
+	TimeoutSeconds: number?,
+}
 export type Options = { Url: string, Method: string, Headers: { [string]: any }, Body: string? }
 
 export type Scheduler = {
@@ -29,6 +36,15 @@ local HttpCall = {}
 -- What a transport hands back when nothing usable came back.
 function HttpCall.NoAnswer(): Response
 	return { Ok = false, Status = 0, Body = nil, Headers = {} }
+end
+
+-- How long to wait for one request. That is the configured time, or less when the call has less
+-- time left before its deadline. A missing or broken Remaining means no deadline was given.
+function HttpCall.TimeoutFor(ConfigSeconds: number, Remaining: number?): number
+	if Remaining == nil or Remaining ~= Remaining then
+		return ConfigSeconds
+	end
+	return math.min(ConfigSeconds, Remaining)
 end
 
 -- Runs Work and waits for it, but for no longer than Seconds. Hands back the outcome and, for Done,

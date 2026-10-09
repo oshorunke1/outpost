@@ -12,7 +12,16 @@
 
 -- Headers on a Response always use lowercase names, for example retry-after.
 export type Response = { Ok: boolean, Status: number, Body: any, Headers: { [string]: string } }
-export type TransportRequest = { Method: string, Url: string, Headers: { [string]: any }, Body: any? }
+-- TimeoutSeconds is how long the call has left before its deadline. A transport should stop
+-- waiting by then. HttpCall, BackendMode and MockTransport keep copies of these two types, so
+-- change them together.
+export type TransportRequest = {
+	Method: string,
+	Url: string,
+	Headers: { [string]: any },
+	Body: any?,
+	TimeoutSeconds: number?,
+}
 -- A transport never throws and answers Status 0 when nothing came back. If one throws anyway the
 -- client treats it as Status 0.
 export type Transport = (Request: TransportRequest) -> Response
@@ -129,9 +138,9 @@ local function Tidy(Result: any): Response
 	return { Ok = Result.Ok == true, Status = Result.Status, Body = Body, Headers = Headers }
 end
 
--- One HTTP call. The budget is checked before the breaker, so a call the budget refuses can never
--- take the breaker's single half open probe.
-local function SendOnce(self: BackendClient, Request: OutboundRequest, Authorization: any): Response
+-- One HTTP call, told how long it has left before the deadline. The budget is checked before the
+-- breaker, so a call the budget refuses can never take the breaker's single half open probe.
+local function SendOnce(self: BackendClient, Request: OutboundRequest, Authorization: any, Deadline: number): Response
 	local Deps = self.Deps
 	local Breaker = (Deps.Breakers :: any)[BackendClient.GroupFor(Request.Path)]
 	local Now = Deps.Now()
@@ -151,6 +160,7 @@ local function SendOnce(self: BackendClient, Request: OutboundRequest, Authoriza
 		Url = Deps.BaseUrl .. Request.Path,
 		Headers = Headers,
 		Body = Request.Body,
+		TimeoutSeconds = Deadline - Now,
 	})
 	local Result = if Worked then Tidy(Raw) else Refusal(0)
 	Breaker:RecordResult(Deps.Now(), Result.Status)
@@ -172,7 +182,7 @@ local function SendWithRetry(
 	if Deps.Now() >= Deadline then
 		return Refusal(BackendClient.RetryLater)
 	end
-	local Result = SendOnce(self, Request, Authorization)
+	local Result = SendOnce(self, Request, Authorization, Deadline)
 	while Result.Status >= 0 and Retry.ShouldRetry(Deps.Policy, Attempt, Result.Status) do
 		local RetryAfter = Retry.ParseRetryAfter(Result.Headers["retry-after"])
 		local Delay = Retry.DelayFor(Deps.Policy, Attempt, Deps.RandomUnit(), RetryAfter)
@@ -181,7 +191,7 @@ local function SendWithRetry(
 		end
 		Deps.Sleep(Delay)
 		Attempt += 1
-		Result = SendOnce(self, Request, Authorization)
+		Result = SendOnce(self, Request, Authorization, Deadline)
 	end
 	return Result
 end

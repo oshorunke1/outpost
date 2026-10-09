@@ -1,6 +1,7 @@
 --!strict
 -- RobloxTransport sends one backend request with HttpService.
--- Every request races a timer, so a request that hangs gives up after RequestTimeoutSeconds.
+-- Every request races a timer, so a request that hangs gives up after RequestTimeoutSeconds, or
+-- sooner when the call has less time left before its deadline.
 -- Any failure, a thrown error, a timeout or a reply that is not JSON, turns into a plain result,
 -- so BackendClient never has to catch anything. Header names come back in lowercase.
 -- The racing and the reply handling live in Shared HttpCall, which has its own Lune spec.
@@ -48,15 +49,20 @@ end
 local RobloxTransport = {}
 
 function RobloxTransport.Send(Request: BackendClient.TransportRequest): BackendClient.Response
+	local Seconds = HttpCall.TimeoutFor(BackendConfig.RequestTimeoutSeconds, Request.TimeoutSeconds)
+	if Seconds <= 0 then
+		-- The call is already out of time, so nothing is sent and it can be tried again later.
+		return { Ok = false, Status = BackendClient.RetryLater, Body = nil, Headers = {} }
+	end
 	local Ran, Outcome, Raw = pcall(HttpCall.Race, function()
 		return HttpService:RequestAsync(HttpCall.ToOptions(Request, Encode) :: any)
-	end, BackendConfig.RequestTimeoutSeconds, Scheduler)
+	end, Seconds, Scheduler)
 	if not Ran then
 		WarnSometimes(`could not send {Request.Method} {Request.Url}, {Outcome}`)
 		return HttpCall.NoAnswer()
 	end
 	if Outcome == "TimedOut" then
-		WarnSometimes(`{Request.Method} {Request.Url} took over {BackendConfig.RequestTimeoutSeconds} seconds`)
+		WarnSometimes(`{Request.Method} {Request.Url} took over {Seconds} seconds`)
 		return HttpCall.NoAnswer()
 	elseif Outcome == "Failed" then
 		WarnSometimes(`{Request.Method} {Request.Url} failed, {Raw}`)

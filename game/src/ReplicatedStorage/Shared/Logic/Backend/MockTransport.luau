@@ -25,7 +25,14 @@
 -- FailNext answers before the body is checked, where a real 503 only comes after it.
 
 export type Response = { Ok: boolean, Status: number, Body: any, Headers: { [string]: string } }
-export type TransportRequest = { Method: string, Url: string, Headers: { [string]: any }, Body: any? }
+-- Copies of the types in BackendClient. The mock answers at once, so it ignores TimeoutSeconds.
+export type TransportRequest = {
+	Method: string,
+	Url: string,
+	Headers: { [string]: any },
+	Body: any?,
+	TimeoutSeconds: number?,
+}
 export type Transport = (Request: TransportRequest) -> Response
 export type Catalog = { [string]: { DisplayName: string, Price: number } }
 -- The parts of Configs/Telemetry the mock checks events against.
