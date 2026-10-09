@@ -37,7 +37,7 @@ rojo serve
 
 From the repo root, `bash tools/ci/luau-check.sh` runs every check in the `luau` CI job. The `repo-hygiene` job's module size checks run locally with `npm run check:size` and `node --test tools/check-module-size.test.mjs` (also `npm run test:tools`). Its secret scan (gitleaks) and link check (lychee) run in CI only.
 
-The full-system quickstart (`docker compose up -d && pnpm demo`) arrives with M2.
+The full-system quickstart (`pnpm setup:dev`, then `docker compose up -d --build --wait && pnpm demo`) arrives with M2.
 
 ## What to look at first
 
