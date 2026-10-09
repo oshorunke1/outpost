@@ -10,7 +10,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  # Superseded pull request runs are cancelled, but every run on main finishes.
+  # Superseded pull request runs are cancelled. Runs on main are never cancelled mid flight, though
+  # GitHub keeps only the newest pending run per group, so a run still queued on main can be replaced.
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
@@ -32,12 +33,13 @@ jobs:
             luau:
               - 'game/**'
               - 'contracts/framework-manifest*.json'
-              - 'tools/ci/**'
+              - 'tools/ci/luau-check.sh'
               - '.github/workflows/ci.yml'
             backend:
               - 'backend/**'
               - 'contracts/**'
               - 'tools/ci/backend-smoke.sh'
+              - 'tools/dockerfile-cmd.mjs'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
@@ -49,6 +51,9 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      # The one deviation from contents read only, as M1 had it: gitleaks-action lists a pull
+      # request's commits through the API.
+      pull-requests: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -57,7 +62,7 @@ jobs:
         with:
           node-version: 22
       - name: Tool tests
-        run: node --test tools/check-module-size.test.mjs tools/setup-dev.test.mjs
+        run: node --test tools/check-module-size.test.mjs tools/setup-dev.test.mjs tools/dockerfile-cmd.test.mjs
       - name: Module size check (700 lines)
         run: node tools/check-module-size.mjs
       - name: Secret scan
@@ -99,7 +104,8 @@ jobs:
           path: game/build/Outpost.rbxl
           if-no-files-found: error
 
-  # The required checks are named backend (22) and backend (24), one per matrix entry.
+  # Each matrix entry reports as backend (22) or backend (24). The required check is backend-ok below,
+  # because a skipped matrix job reports only as backend and would leave those two names pending.
   backend:
     needs: changes
     if: needs.changes.outputs.backend == 'true'
@@ -156,9 +162,11 @@ jobs:
         run: npx --yes @redocly/cli@2.54.2 lint contracts/openapi.yaml
       - name: Build
         run: pnpm --filter @outpost/backend build
-      - name: Start the built server, wait for readiness, stop it with SIGTERM
+      - name: Start the built server with the Dockerfile CMD, wait for readiness, stop it with SIGTERM
         env:
-          NODE_ENV: test
+          # The image's environment. The script makes a throwaway signing key for this step only.
+          NODE_ENV: production
+          PORT: 3000
           DATABASE_URL: mysql://root:outpost-ci@127.0.0.1:3306/outpost_smoke
           # Its own Redis db, away from the integration tests' db 15.
           REDIS_URL: redis://127.0.0.1:6379/14
@@ -166,3 +174,25 @@ jobs:
           OTEL_METRICS_EXPORTER: none
           OTEL_LOGS_EXPORTER: none
         run: bash tools/ci/backend-smoke.sh
+
+  # The one required check for the backend. It passes when every backend matrix entry passed, or
+  # when the backend job was skipped because nothing it covers changed.
+  backend-ok:
+    needs: [changes, backend]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Backend passed or was skipped
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          BACKEND_RESULT: ${{ needs.backend.result }}
+        run: |
+          echo "changes: $CHANGES_RESULT, backend: $BACKEND_RESULT"
+          [ "$CHANGES_RESULT" = success ] || exit 1
+          case "$BACKEND_RESULT" in
+            success | skipped) exit 0 ;;
+            *) exit 1 ;;
+          esac
