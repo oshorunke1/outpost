@@ -2,7 +2,8 @@
 -- RetryPolicy decides whether a failed backend call is worth another try and how long to wait first.
 -- It uses exponential backoff with full jitter, so many servers retrying at once spread out.
 -- The caller passes in a random number from 0 to 1, so tests can pick it and this module never touches game.
--- When the server sends a Retry-After header the wait honours it, up to MaxRetryAfter seconds.
+-- When the server sends a Retry-After header the wait honours it, up to MaxRetryAfter seconds, and
+-- adds our own jittered backoff on top so a crowd of servers told the same thing spreads out.
 
 export type Policy = { MaxAttempts: number, BaseDelay: number, MaxDelay: number }
 
@@ -36,8 +37,10 @@ function RetryPolicy.ShouldRetry(Policy: Policy, Attempt: number, Status: number
 end
 
 -- Picks a wait anywhere from 0 up to this attempt's backoff, which doubles each time and is capped.
--- RetryAfter is the server's own wait in seconds, if it sent one. We wait at least that long, but
--- never longer than MaxRetryAfter, and never shorter than the backoff we picked ourselves.
+-- RetryAfter is the server's own wait in seconds, if it sent one. It is cut down to MaxRetryAfter.
+-- When it is longer than our backoff we wait for it and then our backoff too, so servers that got the
+-- same answer at the same moment do not all retry at the same instant. Otherwise the backoff wins.
+-- The longest wait is MaxRetryAfter plus MaxDelay.
 function RetryPolicy.DelayFor(Policy: Policy, Attempt: number, RandomUnit: number, RetryAfter: number?): number
 	local Unit = RandomUnit
 	if Unit ~= Unit or Unit < 0 then
@@ -54,7 +57,11 @@ function RetryPolicy.DelayFor(Policy: Policy, Attempt: number, RandomUnit: numbe
 	if RetryAfter == nil or RetryAfter ~= RetryAfter or RetryAfter < 0 then
 		return Backoff
 	end
-	return math.max(Backoff, math.min(RetryAfter, RetryPolicy.MaxRetryAfter))
+	local ServerWait = math.min(RetryAfter, RetryPolicy.MaxRetryAfter)
+	if ServerWait <= Backoff then
+		return Backoff
+	end
+	return ServerWait + Backoff
 end
 
 -- Turns a Retry-After header value into seconds. Only plain whole seconds such as "7" are understood.
