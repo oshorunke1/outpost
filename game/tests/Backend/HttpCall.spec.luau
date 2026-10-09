@@ -1,25 +1,27 @@
 --!strict
 local Serde = require("@lune/serde")
 local Harness = require("@Tests/Harness")
+local BackendClient = require("@Logic/Backend/BackendClient")
 local HttpCall = require("@Logic/Backend/HttpCall")
 
 local Describe = Harness.Describe
 local It = Harness.It
 local Expect = Harness.Expect
 
-type Timer = { Seconds: number, Callback: () -> () }
+type Timer = { Seconds: number, Callback: () -> (), Id: number }
 type Rig = {
 	Scheduler: HttpCall.Scheduler,
 	Timers: { Timer },
 	Workers: { thread },
+	Cancelled: { number },
 	Resumed: number,
 }
-type Got = { Outcome: string?, Value: any, Count: number }
+type Got = { Outcome: string?, Value: any, Count: number, Thread: thread? }
 
 -- A fake scheduler. Spawn runs the work in its own coroutine, Delay only remembers the timer, and
 -- the spec decides when the answer arrives and when the timer fires.
 local function NewRig(): Rig
-	local Rig: Rig = { Timers = {}, Workers = {}, Resumed = 0, Scheduler = nil :: any }
+	local Rig: Rig = { Timers = {}, Workers = {}, Cancelled = {}, Resumed = 0, Scheduler = nil :: any }
 	Rig.Scheduler = {
 		Spawn = function(Callback: () -> ())
 			local Thread = coroutine.create(Callback)
@@ -29,8 +31,13 @@ local function NewRig(): Rig
 				error(Err, 0)
 			end
 		end,
-		Delay = function(Seconds: number, Callback: () -> ())
-			table.insert(Rig.Timers, { Seconds = Seconds, Callback = Callback })
+		Delay = function(Seconds: number, Callback: () -> ()): any
+			local Id = #Rig.Timers + 1
+			table.insert(Rig.Timers, { Seconds = Seconds, Callback = Callback, Id = Id })
+			return Id
+		end,
+		Cancel = function(Handle: any)
+			table.insert(Rig.Cancelled, Handle)
 		end,
 		Resume = function(Thread: thread, ...: any)
 			Rig.Resumed += 1
@@ -45,13 +52,14 @@ end
 
 -- Runs Race in its own coroutine, the way a server thread would, and records what it hands back.
 local function Start(Rig: Rig, Work: () -> any, Seconds: number): Got
-	local Got: Got = { Outcome = nil, Value = nil, Count = 0 }
+	local Got: Got = { Outcome = nil, Value = nil, Count = 0, Thread = nil }
 	local Thread = coroutine.create(function()
 		local Outcome, Value = HttpCall.Race(Work, Seconds, Rig.Scheduler)
 		Got.Outcome = Outcome
 		Got.Value = Value
 		Got.Count += 1
 	end)
+	Got.Thread = Thread
 	local Ok, Err = coroutine.resume(Thread)
 	if not Ok then
 		error(Err, 0)
@@ -145,6 +153,189 @@ Describe("HttpCall.Race", function()
 		Rig.Timers[1].Callback()
 		Expect(Got.Count).ToBe(1)
 		Expect(Rig.Resumed).ToBe(1)
+	end)
+end)
+
+Describe("HttpCall.Race edges", function()
+	It("an answer that wins cancels the timer, and a timeout cancels nothing", function()
+		local Rig = NewRig()
+		Start(Rig, Slow, 7)
+		Answer(Rig, "answer")
+		Expect(Rig.Cancelled).ToEqual({ 1 })
+		local Late = NewRig()
+		Start(Late, Slow, 7)
+		Late.Timers[1].Callback()
+		Expect(#Late.Cancelled).ToBe(0)
+	end)
+
+	It("an error that wins cancels the timer too", function()
+		local Rig = NewRig()
+		Start(Rig, function(): any
+			coroutine.yield()
+			error("boom", 0)
+		end, 7)
+		Answer(Rig, nil)
+		Expect(Rig.Cancelled).ToEqual({ 1 })
+	end)
+
+	It("a timer that fires straight away still hands back TimedOut instead of stranding the caller", function()
+		local Rig = NewRig()
+		Rig.Scheduler.Delay = function(_Seconds: number, Callback: () -> ()): any
+			Callback()
+			return nil
+		end
+		local Got = Start(Rig, Slow, 7)
+		Expect(Got.Count).ToBe(1)
+		Expect(Got.Outcome).ToBe("TimedOut")
+		Expect(Rig.Resumed).ToBe(0)
+	end)
+
+	It("a caller that was cancelled while waiting is never woken", function()
+		local Rig = NewRig()
+		local Got = Start(Rig, Slow, 7)
+		coroutine.close(Got.Thread :: thread)
+		Answer(Rig, "late")
+		Expect(Rig.Resumed).ToBe(0)
+		Expect(Got.Count).ToBe(0)
+	end)
+
+	It("a caller that can't wait gets Failed and nothing is started", function()
+		local Rig = NewRig()
+		local Outcome: string? = nil
+		-- A sort comparator runs inside a C call, which is a place where a thread can't yield.
+		table.sort({ 2, 1 }, function(Left: number, Right: number): boolean
+			if Outcome == nil then
+				Outcome = HttpCall.Race(Slow, 7, Rig.Scheduler)
+			end
+			return Left < Right
+		end)
+		Expect(Outcome).ToBe("Failed")
+		Expect(#Rig.Workers).ToBe(0)
+		Expect(#Rig.Timers).ToBe(0)
+	end)
+end)
+
+-- Runs HttpCall.Send in its own coroutine and records the response.
+type SendRig = { Rig: Rig, Sent: { any }, Warned: { string }, Answer: { Response: any? }, Thread: thread? }
+
+local function StartSend(
+	Request: HttpCall.TransportRequest,
+	Reply: (Options: HttpCall.Options) -> any,
+	EncodeWith: ((Value: any) -> string)?
+): (SendRig, () -> HttpCall.Response?)
+	local Rig = NewRig()
+	local Box: { Response: HttpCall.Response? } = { Response = nil }
+	local Setup: SendRig = { Rig = Rig, Sent = {}, Warned = {}, Answer = Box, Thread = nil }
+	local Deps: HttpCall.SendDeps = {
+		Request = function(Options: HttpCall.Options): any
+			table.insert(Setup.Sent, Options)
+			return Reply(Options)
+		end,
+		Encode = EncodeWith or Encode,
+		Decode = Decode,
+		Scheduler = Rig.Scheduler,
+		ConfigSeconds = 15,
+		Warn = function(Message: string)
+			table.insert(Setup.Warned, Message)
+		end,
+	}
+	local Thread = coroutine.create(function()
+		Box.Response = HttpCall.Send(Request, Deps)
+	end)
+	Setup.Thread = Thread
+	local Ok, Err = coroutine.resume(Thread)
+	if not Ok then
+		error(Err, 0)
+	end
+	return Setup, function()
+		return Box.Response
+	end
+end
+
+local function Get(Seconds: number?, Body: any?): HttpCall.TransportRequest
+	return {
+		Method = if Body ~= nil then "POST" else "GET",
+		Url = "https://x.test/v1/flags",
+		Headers = {},
+		Body = Body,
+		TimeoutSeconds = Seconds,
+	}
+end
+
+Describe("HttpCall.Send", function()
+	It("uses the same status numbers as BackendClient", function()
+		Expect(HttpCall.OutOfTime).ToBe(BackendClient.RetryLater)
+		Expect(HttpCall.Unencodable).ToBe(BackendClient.Unencodable)
+	end)
+
+	It("a body that will not encode is refused before anything is sent or timed", function()
+		-- Roblox JSONEncode throws on things like a table that holds itself, so this Encode throws too.
+		local function Refuse(_Value: any): string
+			error("Cannot convert to JSON", 0)
+		end
+		for _, Body in { { amount = 5 }, { 1, 2 } } :: { any } do
+			local Setup, Result = StartSend(Get(10, Body), function(): any
+				error("must not send")
+			end, Refuse)
+			local Response = Result() :: HttpCall.Response
+			Expect(Response.Status).ToBe(HttpCall.Unencodable)
+			Expect(Response.Ok).ToBe(false)
+			Expect(#Setup.Sent).ToBe(0)
+			Expect(#Setup.Rig.Timers).ToBe(0)
+			Expect(#Setup.Warned).ToBe(1)
+		end
+	end)
+
+	It("a call with no time left is refused before anything is sent", function()
+		for _, Seconds in { 0, -1 } do
+			local Setup, Result = StartSend(Get(Seconds), function(): any
+				error("must not send")
+			end)
+			Expect((Result() :: HttpCall.Response).Status).ToBe(HttpCall.OutOfTime)
+			Expect(#Setup.Sent).ToBe(0)
+		end
+	end)
+
+	It("waits the smaller of the configured time and the time the call has left", function()
+		local Setup = StartSend(Get(6), function(): any
+			return coroutine.yield()
+		end)
+		Expect(Setup.Rig.Timers[1].Seconds).ToBe(6)
+		local Long = StartSend(Get(120), function(): any
+			return coroutine.yield()
+		end)
+		Expect(Long.Rig.Timers[1].Seconds).ToBe(15)
+		local Unset = StartSend(Get(nil), function(): any
+			return coroutine.yield()
+		end)
+		Expect(Unset.Rig.Timers[1].Seconds).ToBe(15)
+	end)
+
+	It("an answer comes back as a Response with lowercase headers and an encoded body went out", function()
+		local Setup, Result = StartSend(Get(10, { amount = 5 }), function(): any
+			return { Success = true, StatusCode = 201, Headers = { ["Idempotent-Replayed"] = "true" }, Body = '{"a":1}' }
+		end)
+		local Response = Result() :: HttpCall.Response
+		Expect(Response.Ok).ToBe(true)
+		Expect(Response.Status).ToBe(201)
+		Expect(Response.Body.a).ToBe(1)
+		Expect(Response.Headers["idempotent-replayed"]).ToBe("true")
+		Expect(Decode(Setup.Sent[1].Body).amount).ToBe(5)
+	end)
+
+	It("a request that throws or times out is Status 0 with a warning", function()
+		local Setup, Result = StartSend(Get(10), function(): any
+			error("Http requests are not enabled", 0)
+		end)
+		Expect((Result() :: HttpCall.Response).Status).ToBe(0)
+		Expect(#Setup.Warned).ToBe(1)
+		local Hung, HungResult = StartSend(Get(10), function(): any
+			return coroutine.yield()
+		end)
+		Expect(HungResult()).ToBeNil()
+		Hung.Rig.Timers[1].Callback()
+		Expect((HungResult() :: HttpCall.Response).Status).ToBe(0)
+		Expect(#Hung.Warned).ToBe(1)
 	end)
 end)
 

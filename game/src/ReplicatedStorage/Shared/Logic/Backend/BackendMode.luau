@@ -8,8 +8,8 @@
 -- Nothing here touches game. Whether this is Studio and how to find the secret are passed in.
 
 export type Mode = "Mock" | "Roblox" | "Offline"
-export type Response = { Ok: boolean, Status: number, Body: any, Headers: { [string]: string } }
 -- Copies of the types in BackendClient, because Shared modules require nothing. Change them together.
+export type Response = { Ok: boolean, Status: number, Body: any, Headers: { [string]: string } }
 export type TransportRequest = {
 	Method: string,
 	Url: string,

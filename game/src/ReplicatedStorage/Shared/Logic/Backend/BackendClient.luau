@@ -77,6 +77,11 @@ BackendClient.OverBudget = -2
 -- The next wait would have passed the call's deadline, so we stopped. The backend may or may not
 -- have done the work, so treat it like a timeout and try again later with the same key.
 BackendClient.RetryLater = -3
+-- The body could not be turned into JSON. Sending it again would fail the same way, so it is never
+-- retried, and the breaker skips it because it says nothing about the backend.
+BackendClient.Unencodable = -4
+-- This server is Offline, see BackendMode. Nothing was sent and nothing is retried.
+BackendClient.Offline = -5
 
 -- Long enough for two full Retry-After waits, so background calls rarely give up early.
 -- User facing calls such as a purchase should pass a much shorter deadline.

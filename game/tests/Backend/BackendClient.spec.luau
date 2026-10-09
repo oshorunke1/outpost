@@ -669,4 +669,46 @@ Describe("BackendClient time left for each request", function()
 	end)
 end)
 
+Describe("BackendClient refusals from the transport", function()
+	It("an unencodable body or an Offline server is never retried and never opens the breaker", function()
+		for _, Status in { BackendClient.Unencodable, BackendClient.Offline } do
+			local Script: { any } = { TokenReply("tok-1") }
+			for _ = 1, 6 do
+				table.insert(Script, Reply(Status))
+			end
+			local Rig = MakeRig(Script)
+			for _ = 1, 6 do
+				Expect(Rig.Client:Send(Requests.Wallet(1001)).Status).ToBe(Status)
+			end
+			Expect(#Rig.Calls).ToBe(7)
+			Expect(#Rig.Slept).ToBe(0)
+			Expect(Rig.Client:BreakerState()).ToBe("Closed")
+		end
+	end)
+
+	It("an Offline token trade fails at once, without retries", function()
+		local Rig = MakeRig({ Reply(BackendClient.Offline) })
+		Expect(Rig.Client:Send(Requests.Wallet(1001)).Status).ToBe(BackendClient.Offline)
+		Expect(#Rig.Calls).ToBe(1)
+		Expect(#Rig.Slept).ToBe(0)
+	end)
+
+	It("the refusal statuses are all different", function()
+		local Seen: { [number]: boolean } = {}
+		for _, Status in
+			{
+				BackendClient.BreakerOpen,
+				BackendClient.OverBudget,
+				BackendClient.RetryLater,
+				BackendClient.Unencodable,
+				BackendClient.Offline,
+			}
+		do
+			Expect(Status < 0).ToBe(true)
+			Expect(Seen[Status]).ToBeNil()
+			Seen[Status] = true
+		end
+	end)
+end)
+
 return nil
