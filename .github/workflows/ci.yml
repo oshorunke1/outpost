@@ -51,9 +51,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      # The one deviation from contents read only, as M1 had it: gitleaks-action lists a pull
-      # request's commits through the API.
-      pull-requests: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -65,10 +62,13 @@ jobs:
         run: node --test tools/check-module-size.test.mjs tools/setup-dev.test.mjs tools/dockerfile-cmd.test.mjs
       - name: Module size check (700 lines)
         run: node tools/check-module-size.mjs
+      # The pinned image scans the whole history. gitleaks-action scans "first PR commit^..head",
+      # which breaks on this repo because the imported identity-service history starts at a root
+      # commit with no parent. Known false positives are listed in .gitleaksignore.
       - name: Secret scan
-        uses: gitleaks/gitleaks-action@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          docker run --rm --user "$(id -u):$(id -g)" -v "$GITHUB_WORKSPACE:/repo"
+          zricethezav/gitleaks:v8.30.1 git /repo --redact --no-banner --exit-code 1
       - name: Markdown links (local files only)
         uses: lycheeverse/lychee-action@v2
         with:
