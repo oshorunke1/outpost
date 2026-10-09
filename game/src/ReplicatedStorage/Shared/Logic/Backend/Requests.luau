@@ -120,10 +120,21 @@ function Requests.Purchase(UserId: number, ItemId: string, Key: string): Request
 	}
 end
 
-local UuidShape = "^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$"
+-- The same rule the backend uses for ids, zod's uuid check. The version digit is 1 to 8 and the
+-- variant digit is 8, 9, a or b in either case. The all zero id and the lowercase all f id are
+-- allowed on their own.
+local UuidRule = "^%x%x%x%x%x%x%x%x%-%x%x%x%x%-[1-8]%x%x%x%-[89abAB]%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$"
+local SpecialUuids: { [string]: boolean } = {
+	["00000000-0000-0000-0000-000000000000"] = true,
+	["ffffffff-ffff-ffff-ffff-ffffffffffff"] = true,
+}
+
+local function IsTransactionId(Value: any): boolean
+	return type(Value) == "string" and (SpecialUuids[Value] == true or string.match(Value, UuidRule) ~= nil)
+end
 
 function Requests.Fulfilled(TransactionId: string): Request
-	if type(TransactionId) ~= "string" or string.match(TransactionId, UuidShape) == nil then
+	if not IsTransactionId(TransactionId) then
 		error(`{TransactionId} is not a transaction id`, 2)
 	end
 	return { Method = "POST", Path = `/v1/economy/transactions/{TransactionId}/fulfilled`, Body = {} }

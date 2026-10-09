@@ -102,6 +102,37 @@ Describe("Requests refuse a bad transaction id", function()
 		Expect(Requests.Fulfilled("abcdef01-2345-4789-89ab-cdef01234567").Method).ToBe("POST")
 	end)
 
+	-- Task 25 fix M5. The backend checks ids with zod's uuid rule, so we match it exactly.
+	-- The third group starts with a version from 1 to 8 and the fourth with a variant of 8, 9, a or b.
+	-- The all zero and all f ids are allowed as special cases, the all f one only in lowercase.
+	It("follows the backend's uuid rule for version, variant and the two special ids", function()
+		for _, Good in
+			{
+				"00000000-0000-1000-8000-000000000000",
+				"00000000-0000-8000-b000-000000000000",
+				"00000000-0000-4000-A000-000000000000",
+				"00000000-0000-0000-0000-000000000000",
+				"ffffffff-ffff-ffff-ffff-ffffffffffff",
+			}
+		do
+			Expect(Requests.Fulfilled(Good).Method).ToBe("POST")
+		end
+		for _, Bad in
+			{
+				"00000000-0000-0000-8000-000000000001",
+				"00000000-0000-9000-8000-000000000001",
+				"00000000-0000-4000-7000-000000000001",
+				"00000000-0000-4000-c000-000000000001",
+				"FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF",
+				"ffffffff-ffff-ffff-ffff-fffffffffffe",
+			}
+		do
+			Expect(function()
+				Requests.Fulfilled(Bad)
+			end).ToThrow("not a transaction id")
+		end
+	end)
+
 	It("refuses dashes only, wrong group lengths, non hex and extra text", function()
 		for _, Bad in
 			{
@@ -129,7 +160,7 @@ end)
 
 Describe("Requests idempotency keys", function()
 	It("Earn and Purchase refuse a key the backend would reject", function()
-		for _, Bad in { "short", "", "has space 123", "slash/12345", string.rep("a", 129), "ünïcode-key" } do
+		for _, Bad in { "short", "seven77", "", "has space 123", "slash/12345", string.rep("a", 129), "ünïcode-key" } do
 			Expect(function()
 				Requests.Earn(1, 5, Bad)
 			end).ToThrow("not an idempotency key")
@@ -139,6 +170,8 @@ Describe("Requests idempotency keys", function()
 		end
 		Expect(Requests.IsIdempotencyKey(string.rep("a", 128))).ToBe(true)
 		Expect(Requests.IsIdempotencyKey("A_b-1:2:3")).ToBe(true)
+		Expect(Requests.IsIdempotencyKey("eight888")).ToBe(true)
+		Expect(Requests.IsIdempotencyKey("seven77")).ToBe(false)
 		Expect(Requests.IsIdempotencyKey((nil :: any) :: string)).ToBe(false)
 	end)
 
