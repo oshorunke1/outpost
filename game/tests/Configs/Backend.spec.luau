@@ -22,9 +22,13 @@ local function Walk(Folder: string, Found: { string })
 end
 
 Describe("Configs/Backend", function()
-	It("ships turned off, so no server talks to a backend until one is deployed", function()
-		Expect(BackendConfig.Enabled).ToBe(false)
-	end)
+	It(
+		"ships turned off, so no server talks to a backend and Studio keeps the old Coins until someone opts in",
+		function()
+			Expect(BackendConfig.Enabled).ToBe(false)
+			Expect(BackendConfig.StudioLedger).ToBe(false)
+		end
+	)
 
 	It("a full burst plus a minute of refill stays under Roblox's 500 requests a minute", function()
 		Expect(BackendConfig.HttpBurst + BackendConfig.HttpBudgetPerMinute < 500).ToBe(true)

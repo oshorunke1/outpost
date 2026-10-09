@@ -10,12 +10,14 @@ local RunService = game:GetService("RunService")
 local ServerStorage = game:GetService("ServerStorage")
 
 local Shared = ReplicatedStorage.Shared
+local BackendMode = require(Shared.Logic.Backend.BackendMode)
 local Migrations = require(Shared.Logic.Data.Migrations)
 local Migrator = require(Shared.Logic.Data.Migrator)
 local Places = require(Shared.Configs.Places)
 local SaveSafety = require(Shared.Logic.Data.SaveSafety)
 local StoreSelector = require(Shared.Logic.Data.StoreSelector)
 local Template = require(Shared.Logic.Data.Template)
+local BackendConfig = require(ServerStorage.Configs.Backend)
 local NetGuard = require(ServerStorage.Classes.Util.NetGuard)
 local ProfileService = require(ServerStorage.Vendor.ProfileService) :: any
 
@@ -97,12 +99,11 @@ local function ReleaseSafely(Player: Player)
 end
 
 function DataService:Init()
-	local Choice = StoreSelector.Choose(
-		game.PlaceId,
-		RunService:IsStudio(),
-		Places,
-		ServerStorage:GetAttribute("ForceMockData") == true
-	)
+	local IsStudio = RunService:IsStudio()
+	-- A Studio ledger run keeps saves in memory, so it never writes the real test store.
+	local ForceMock = ServerStorage:GetAttribute("ForceMockData") == true
+		or BackendMode.ForceMockSaves(IsStudio, BackendConfig.StudioLedger)
+	local Choice = StoreSelector.Choose(game.PlaceId, IsStudio, Places, ForceMock)
 	local Store = ProfileService.GetProfileStore(Choice.StoreName, Template.Defaults)
 	ActiveStore = if Choice.Kind == "Mock" then Store.Mock else Store
 	print(`[DataService] using the {Choice.Kind} store {Choice.StoreName}`)

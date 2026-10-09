@@ -5,8 +5,8 @@
 -- A live server uses RobloxTransport only when Configs/Backend is turned on and the API key is in
 -- the Secrets Store. The key is sent as an ApiKey header and never appears in code or the place.
 -- Any other live server is Offline. It sends nothing and every call is refused at once.
--- Enabled is the cut over switch for the economy. While it is false the game keeps its old
--- DataStore Coins, so a live server never keeps Coins in the mock's memory.
+-- EconomyLive is the cut over switch for the economy. A live server only turns it on in Roblox
+-- mode, so it never keeps Coins in the mock's memory.
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -115,9 +115,11 @@ function Backend.Mode(): BackendMode.Mode
 	return Mode
 end
 
--- True once Configs/Backend is turned on. Economy code keeps the old DataStore Coins while false.
-function Backend.Enabled(): boolean
-	return BackendConfig.Enabled
+-- The economy switch. True only in Roblox mode, or in Studio with StudioLedger turned on.
+-- While it is false the economy keeps the old DataStore Coins. A live server with the backend
+-- turned on but no secret is Offline, so it stays false there too.
+function Backend.EconomyLive(): boolean
+	return BackendMode.EconomyLive(Backend.Mode(), BackendConfig.StudioLedger)
 end
 
 -- The mock's fault switches, so a Studio tester can fail the next call from the command bar.

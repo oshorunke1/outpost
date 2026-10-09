@@ -35,6 +35,20 @@ function BackendMode.Pick(IsStudio: boolean, Enabled: boolean, FindSecret: () ->
 	return if FindSecret() then "Roblox" else "Offline"
 end
 
+-- True when Coins should live in the backend ledger instead of the old DataStore save.
+-- That is a live server in Roblox mode, or Studio's mock when StudioLedger opts in so the ledger
+-- path can be tried there. Offline is never live, so a missing secret keeps the old Coins.
+function BackendMode.EconomyLive(Mode: Mode, StudioLedger: boolean): boolean
+	return Mode == "Roblox" or (Mode == "Mock" and StudioLedger)
+end
+
+-- True when DataService must keep saves in memory. Studio on a test place normally writes the
+-- real test DataStore, so a Studio ledger run would move those saves onto a wallet that vanishes
+-- when Studio stops. The opt in keeps every save in memory instead.
+function BackendMode.ForceMockSaves(IsStudio: boolean, StudioLedger: boolean): boolean
+	return IsStudio and StudioLedger
+end
+
 -- The transport an Offline server uses. Every call is refused at once and nothing is sent.
 function BackendMode.Offline(_Request: TransportRequest): Response
 	return { Ok = false, Status = BackendMode.OfflineStatus, Body = nil, Headers = {} }

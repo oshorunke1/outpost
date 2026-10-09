@@ -68,4 +68,32 @@ Describe("BackendMode.Offline", function()
 	end)
 end)
 
+Describe("BackendMode.EconomyLive", function()
+	It(
+		"the ledger runs the economy only on a live server that talks to the backend, or on Studio's mock when opted in",
+		function()
+			local Cases: { { Mode: BackendMode.Mode, StudioLedger: boolean, Live: boolean } } = {
+				{ Mode = "Roblox", StudioLedger = false, Live = true },
+				{ Mode = "Roblox", StudioLedger = true, Live = true },
+				{ Mode = "Mock", StudioLedger = false, Live = false },
+				{ Mode = "Mock", StudioLedger = true, Live = true },
+				{ Mode = "Offline", StudioLedger = false, Live = false },
+				{ Mode = "Offline", StudioLedger = true, Live = false },
+			}
+			for _, Case in Cases do
+				Expect(BackendMode.EconomyLive(Case.Mode, Case.StudioLedger)).ToBe(Case.Live)
+			end
+		end
+	)
+end)
+
+Describe("BackendMode.ForceMockSaves", function()
+	It("the Studio opt in also keeps saves in memory, and nothing else does", function()
+		Expect(BackendMode.ForceMockSaves(true, true)).ToBe(true)
+		Expect(BackendMode.ForceMockSaves(true, false)).ToBe(false)
+		Expect(BackendMode.ForceMockSaves(false, true)).ToBe(false)
+		Expect(BackendMode.ForceMockSaves(false, false)).ToBe(false)
+	end)
+end)
+
 return nil
