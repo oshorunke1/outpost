@@ -34,6 +34,9 @@ jobs:
               - 'game/**'
               - 'contracts/framework-manifest*.json'
               - 'tools/ci/luau-check.sh'
+              # The Lune drift specs read these backend sources, so a change there must rerun them.
+              - 'backend/src/modules/telemetry/**'
+              - 'backend/src/modules/economy/**'
               - '.github/workflows/ci.yml'
             backend:
               - 'backend/**'
