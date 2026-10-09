@@ -53,6 +53,7 @@ export function registerEconomyRoutes(app: ZodApp, deps: { ledger: LedgerService
       onRequest: economy,
       schema: {
         tags: ['economy'],
+        operationId: 'submitTransaction',
         summary: 'Earn or purchase. Retrying with the same Idempotency-Key returns the first result.',
         security: bearer,
         headers: idempotencyHeaders,
@@ -91,6 +92,7 @@ export function registerEconomyRoutes(app: ZodApp, deps: { ledger: LedgerService
       onRequest: economy,
       schema: {
         tags: ['economy'],
+        operationId: 'markPurchaseFulfilled',
         summary: 'The game granted the purchased item. Safe to repeat. Only the client that made the purchase can acknowledge it.',
         security: bearer,
         params: z.object({ id: z.uuid() }),
@@ -111,6 +113,7 @@ export function registerEconomyRoutes(app: ZodApp, deps: { ledger: LedgerService
       onRequest: economy,
       schema: {
         tags: ['economy'],
+        operationId: 'listUnfulfilledPurchases',
         summary: 'Purchases the game has not acknowledged yet, for the reconcile on join',
         security: bearer,
         params: userIdParams,

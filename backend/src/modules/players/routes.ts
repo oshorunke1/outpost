@@ -16,7 +16,14 @@ export function registerPlayerRoutes(app: ZodApp, deps: { players: PlayersServic
     '/v1/players/:userId/sessions',
     {
       onRequest: economy,
-      schema: { tags: ['players'], summary: 'A player joined a game server', security: bearer, params: userIdParams, response: { 200: walletSchema, ...gameErrors } },
+      schema: {
+        tags: ['players'],
+        operationId: 'startPlayerSession',
+        summary: 'A player joined a game server',
+        security: bearer,
+        params: userIdParams,
+        response: { 200: walletSchema, ...gameErrors },
+      },
     },
     (request) => deps.players.join(request.params.userId),
   );
@@ -25,7 +32,14 @@ export function registerPlayerRoutes(app: ZodApp, deps: { players: PlayersServic
     '/v1/players/:userId/sessions/end',
     {
       onRequest: economy,
-      schema: { tags: ['players'], summary: 'A player left a game server', security: bearer, params: userIdParams, response: { 204: z.null(), ...gameErrors } },
+      schema: {
+        tags: ['players'],
+        operationId: 'endPlayerSession',
+        summary: 'A player left a game server',
+        security: bearer,
+        params: userIdParams,
+        response: { 204: z.null(), ...gameErrors },
+      },
     },
     async (request, reply) => {
       await deps.players.leave(request.params.userId);
@@ -37,7 +51,14 @@ export function registerPlayerRoutes(app: ZodApp, deps: { players: PlayersServic
     '/v1/players/:userId/wallet',
     {
       onRequest: economy,
-      schema: { tags: ['players'], security: bearer, params: userIdParams, response: { 200: walletSchema, ...gameErrors } },
+      schema: {
+        tags: ['players'],
+        operationId: 'getWallet',
+        summary: 'Current coin balance of a player',
+        security: bearer,
+        params: userIdParams,
+        response: { 200: walletSchema, ...gameErrors },
+      },
     },
     (request) => deps.players.wallet(request.params.userId),
   );

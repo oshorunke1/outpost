@@ -57,6 +57,7 @@ export function registerTelemetryRoutes(app: ZodApp, deps: TelemetryRouteDeps): 
       bodyLimit: TELEMETRY_BODY_LIMIT_BYTES,
       schema: {
         tags: ['telemetry'],
+        operationId: 'submitTelemetryBatch',
         summary: 'Queue up to 500 gameplay and health events. Answers before any database work.',
         security: [{ bearer: [] }],
         body: telemetryBatchSchema,

@@ -43,7 +43,9 @@ export function registerIdentityRoutes(
     {
       schema: {
         tags: ['identity'],
+        operationId: 'login',
         summary: 'Operator login with email and password',
+        security: [],
         body: z.object({ email: z.string().trim().min(3).max(254), password: z.string().min(1).max(PASSWORD_MAX) }).strict(),
         response: { 200: tokenPair, 400: errorBody, 401: errorBody, 429: errorBody, 503: errorBody },
       },
@@ -62,7 +64,9 @@ export function registerIdentityRoutes(
     {
       schema: {
         tags: ['identity'],
+        operationId: 'refreshToken',
         summary: 'Rotate a refresh token. Replaying an old one signs the session out.',
+        security: [],
         body: z.object({ refreshToken: z.string().regex(REFRESH_TOKEN) }).strict(),
         response: { 200: tokenPair, 400: errorBody, 401: errorBody, 429: errorBody, 503: errorBody },
       },
@@ -74,7 +78,13 @@ export function registerIdentityRoutes(
     '/auth/logout',
     {
       onRequest: operatorOnly,
-      schema: { tags: ['identity'], summary: 'Sign out this session', security: bearer, response: { 204: z.null(), 401: errorBody, 503: errorBody } },
+      schema: {
+        tags: ['identity'],
+        operationId: 'logout',
+        summary: 'Sign out this session',
+        security: bearer,
+        response: { 204: z.null(), 401: errorBody, 503: errorBody },
+      },
     },
     async (request, reply) => {
       await deps.auth.logout(requireOperator(request));
@@ -88,6 +98,7 @@ export function registerIdentityRoutes(
       onRequest: operatorOnly,
       schema: {
         tags: ['identity'],
+        operationId: 'logoutAll',
         summary: 'Sign out everywhere by bumping tokenVersion',
         security: bearer,
         response: { 204: z.null(), 401: errorBody, 503: errorBody },
@@ -105,6 +116,7 @@ export function registerIdentityRoutes(
       onRequest: operatorOnly,
       schema: {
         tags: ['identity'],
+        operationId: 'listSessions',
         summary: 'List the sessions of this operator',
         security: bearer,
         response: { 200: z.object({ sessions: z.array(sessionView) }), 401: errorBody, 503: errorBody },
@@ -119,6 +131,7 @@ export function registerIdentityRoutes(
       onRequest: operatorOnly,
       schema: {
         tags: ['identity'],
+        operationId: 'revokeSession',
         summary: 'End one session of this operator',
         security: bearer,
         params: z.object({ id: z.uuid() }),
@@ -133,7 +146,15 @@ export function registerIdentityRoutes(
 
   app.get(
     '/.well-known/jwks.json',
-    { schema: { tags: ['identity'], summary: 'Public signing keys', response: { 200: z.object({ keys: z.array(publicJwk) }) } } },
+    {
+      schema: {
+        tags: ['identity'],
+        operationId: 'getJwks',
+        summary: 'Public signing keys',
+        security: [],
+        response: { 200: z.object({ keys: z.array(publicJwk) }) },
+      },
+    },
     (_request, reply) => {
       void reply.header('cache-control', 'public, max-age=300');
       return { keys: deps.tokens.jwks().keys.map((key) => publicJwk.parse(key)) };
@@ -146,6 +167,7 @@ export function registerIdentityRoutes(
     {
       schema: {
         tags: ['identity'],
+        operationId: 'exchangeServiceToken',
         summary: 'Trade a service API key (Authorization: ApiKey opk_<clientId>.<secret>) for a 15 minute scoped token',
         security: [{ apiKey: [] }],
         response: {

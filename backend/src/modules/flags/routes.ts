@@ -17,6 +17,7 @@ export function registerFlagRoutes(app: ZodApp, deps: FlagRouteDeps): void {
       onRequest: deps.guardFor('game:flags.read'),
       schema: {
         tags: ['flags'],
+        operationId: 'listFlags',
         summary: 'Current flag values. The game keeps its last known values if this fails.',
         security: [{ bearer: [] }],
         response: {

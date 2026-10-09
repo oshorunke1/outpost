@@ -119,8 +119,10 @@ const readyBody = z.object({ status: z.enum(['ready', 'not_ready', 'draining']),
 // healthz says the process is up (liveness) and never touches a dependency, so a database outage
 // never gets the process restarted. readyz says it can serve traffic (readiness).
 export function registerHealthRoutes(app: ZodApp, health: HealthChecks): void {
-  app.get('/healthz', { schema: { tags: ['ops'], response: { 200: z.object({ status: z.literal('ok') }) } } }, () => ({ status: 'ok' as const }));
-  app.get('/readyz', { schema: { tags: ['ops'], response: { 200: readyBody, 503: readyBody } } }, async (_request, reply) => {
+  const liveness = { tags: ['ops'], operationId: 'getHealth', summary: 'Liveness, the process is up', security: [] };
+  const readiness = { tags: ['ops'], operationId: 'getReadiness', summary: 'Readiness, MySQL and Redis both answer', security: [] };
+  app.get('/healthz', { schema: { ...liveness, response: { 200: z.object({ status: z.literal('ok') }) } } }, () => ({ status: 'ok' as const }));
+  app.get('/readyz', { schema: { ...readiness, response: { 200: readyBody, 503: readyBody } } }, async (_request, reply) => {
     const report = await health.ready();
     const status = report.draining ? 'draining' : report.ok ? 'ready' : 'not_ready';
     return reply.code(report.ok ? 200 : 503).send({ status, checks: report.checks });
