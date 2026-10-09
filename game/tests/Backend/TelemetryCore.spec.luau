@@ -266,6 +266,26 @@ Describe("TelemetryCore health events", function()
 		end
 		Expect(States).ToEqual({ "Open", "HalfOpen", "Closed" })
 	end)
+
+	It("NetGuard drops are capped server wide in each window, and the skipped ones are warned once", function()
+		local Rig = NewRig()
+		local Cap = TelemetryCore.MaxNetGuardDropsPerWindow
+		-- Many players each dropping a packet at once, more than the cap allows.
+		for UserId = 1, Cap + 30 do
+			Rig.Core:NetGuardDrop(UserId, "Shop.Buy", "Throttled")
+		end
+		Expect(Rig.Core:Pending()).ToBe(Cap)
+		Expect(Rig.Warned("skipped")).ToBe(false)
+		-- A new window lets drops through again and warns about the last window's skipped ones.
+		Rig.Clock.Now += TelemetryCore.NetGuardWindowSeconds
+		Rig.Core:NetGuardDrop(9001, "Shop.Buy", "Throttled")
+		Expect(Rig.Core:Pending()).ToBe(Cap + 1)
+		Expect(Rig.Warned("skipped 30 netguard_drop events")).ToBe(true)
+		Expect(#Rig.Warnings).ToBe(1)
+		-- Other events never count against the cap.
+		Rig.Core:Track("player_join", 9002)
+		Expect(Rig.Core:Pending()).ToBe(Cap + 2)
+	end)
 end)
 
 return nil

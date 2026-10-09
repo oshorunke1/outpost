@@ -36,15 +36,34 @@ export type Deps = {
 
 export type FlushResult = "Sent" | "Lost" | "Empty"
 
-type Fields = { Deps: Deps, LastBreakerState: string }
+type Fields = {
+	Deps: Deps,
+	LastBreakerState: string,
+	-- When the current NetGuard window started, how many drops it took and how many it skipped.
+	DropWindowStart: number,
+	DropsInWindow: number,
+	DropsSkipped: number,
+}
 
 local TelemetryCore = {}
 TelemetryCore.__index = TelemetryCore
 
 export type TelemetryCore = typeof(setmetatable({} :: Fields, TelemetryCore))
 
+-- NetGuard already logs each player's drops at most once per packet every 5 seconds, but many
+-- players together could still flood the buffer. So the whole server tracks at most this many
+-- netguard_drop events in each window, and the rest are counted and warned about once.
+TelemetryCore.MaxNetGuardDropsPerWindow = 50
+TelemetryCore.NetGuardWindowSeconds = 10
+
 function TelemetryCore.new(Deps: Deps): TelemetryCore
-	local Object: Fields = { Deps = Deps, LastBreakerState = "Closed" }
+	local Object: Fields = {
+		Deps = Deps,
+		LastBreakerState = "Closed",
+		DropWindowStart = -math.huge,
+		DropsInWindow = 0,
+		DropsSkipped = 0,
+	}
 	return setmetatable(Object, TelemetryCore)
 end
 
@@ -68,8 +87,23 @@ function TelemetryCore.Pending(self: TelemetryCore): number
 	return self.Deps.Buffer:Count()
 end
 
--- A packet NetGuard dropped and logged. Only a real packet name and a known reason are kept.
+-- A packet NetGuard dropped and logged. Only a real packet name and a known reason are kept, and
+-- only up to the server wide cap in each window.
 function TelemetryCore.NetGuardDrop(self: TelemetryCore, UserId: number, PacketName: string, Reason: string)
+	local Now = self.Deps.Now()
+	if Now - self.DropWindowStart >= TelemetryCore.NetGuardWindowSeconds then
+		if self.DropsSkipped > 0 then
+			self.Deps.Warn(`skipped {self.DropsSkipped} netguard_drop events over the server wide cap`)
+		end
+		self.DropWindowStart = Now
+		self.DropsInWindow = 0
+		self.DropsSkipped = 0
+	end
+	if self.DropsInWindow >= TelemetryCore.MaxNetGuardDropsPerWindow then
+		self.DropsSkipped += 1
+		return
+	end
+	self.DropsInWindow += 1
 	local Values = self.Deps.Schema.DimValues
 	local Dims: { [string]: string } = {
 		packet = if table.find(Values.packet, PacketName) ~= nil then PacketName else "Unknown",
