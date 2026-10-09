@@ -6,7 +6,6 @@ import type {
   RawServerDefault,
 } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { z } from 'zod';
 
 export type ZodApp = FastifyInstance<
   RawServerDefault,
@@ -16,7 +15,8 @@ export type ZodApp = FastifyInstance<
   ZodTypeProvider
 >;
 
-export const errorBody = z.object({ error: z.string(), message: z.string() });
+// Lives in schemas.ts so it is a named component in the OpenAPI document.
+export { errorBody } from './schemas.js';
 
 const BEARER = /^Bearer ([A-Za-z0-9._~+/=-]+)$/;
 
