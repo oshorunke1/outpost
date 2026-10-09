@@ -117,6 +117,23 @@ Describe("JoinLoop visits", function()
 		Expect(#Rig.Sent("join")).ToBe(JoinsBefore)
 	end)
 
+	It("an old loop that stops never clears the running mark of the new visit's loop", function()
+		local Rig = NewRig({ FailJoins = true })
+		Rig.Player(1001, nil, false)
+		Rig.Here[1001] = true
+		Rig.Loops:BeginVisit(1001)
+		Rig.Gate.HoldWait = true
+		local Old = StartLoop(Rig, 1001)
+		-- The player rejoins and the new visit's loop parks in its own wait.
+		Rig.Loops:BeginVisit(1001)
+		Rig.Gate.HoldWait = true
+		local New = StartLoop(Rig, 1001)
+		Expect(coroutine.status(New)).ToBe("suspended")
+		Expect(Finish(Old)).ToBe("Superseded")
+		-- The new loop is still going, so another Run for this visit must still say Busy.
+		Expect(Rig.Loops:Run(1001)).ToBe("Busy")
+	end)
+
 	It("only one loop runs per visit", function()
 		local Rig = NewRig()
 		Rig.Player(1001, nil, false)
