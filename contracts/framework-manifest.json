@@ -5,7 +5,7 @@
       "hasInit": true,
       "hasStart": false,
       "kind": "service",
-      "lineCount": 162,
+      "lineCount": 236,
       "listens": [
         "Profile.RequestSnapshot"
       ],
@@ -13,10 +13,28 @@
       "path": "game/src/ServerStorage/Classes/Services/DataService.luau"
     },
     {
+      "hasInit": true,
+      "hasStart": true,
+      "kind": "service",
+      "lineCount": 304,
+      "listens": [],
+      "name": "EconomyService",
+      "path": "game/src/ServerStorage/Classes/Services/EconomyService.luau"
+    },
+    {
+      "hasInit": true,
+      "hasStart": true,
+      "kind": "service",
+      "lineCount": 58,
+      "listens": [],
+      "name": "FlagService",
+      "path": "game/src/ServerStorage/Classes/Services/FlagService.luau"
+    },
+    {
       "hasInit": false,
       "hasStart": true,
       "kind": "controller",
-      "lineCount": 66,
+      "lineCount": 67,
       "listens": [],
       "name": "HudController",
       "path": "game/src/ReplicatedStorage/Classes/Controllers/HudController.luau"
@@ -34,7 +52,7 @@
       "hasInit": true,
       "hasStart": true,
       "kind": "service",
-      "lineCount": 118,
+      "lineCount": 131,
       "listens": [
         "Orb.Collect"
       ],
@@ -45,12 +63,21 @@
       "hasInit": true,
       "hasStart": false,
       "kind": "service",
-      "lineCount": 41,
+      "lineCount": 58,
       "listens": [
         "Shop.Buy"
       ],
       "name": "ShopService",
       "path": "game/src/ServerStorage/Classes/Services/ShopService.luau"
+    },
+    {
+      "hasInit": true,
+      "hasStart": true,
+      "kind": "service",
+      "lineCount": 111,
+      "listens": [],
+      "name": "TelemetryService",
+      "path": "game/src/ServerStorage/Classes/Services/TelemetryService.luau"
     }
   ],
   "packets": [
@@ -75,7 +102,7 @@
     {
       "direction": "ServerToClient",
       "name": "Profile.Snapshot",
-      "payload": "{ Coins: integer 0..1000000000, OwnedItems: list of enum ItemId, up to 64 }",
+      "payload": "{ Coins: integer 0..1000000000, OwnedItems: list of enum ItemId, up to 64, State: string up to 16 bytes }",
       "rateLimit": null
     },
     {

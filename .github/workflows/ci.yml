@@ -7,17 +7,24 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseded pull request runs are cancelled. Runs on main are never cancelled mid flight, though
+  # GitHub keeps only the newest pending run per group, so a run still queued on main can be replaced.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read # paths-filter lists the PR's changed files through the API
     outputs:
       luau: ${{ steps.filter.outputs.luau }}
+      backend: ${{ steps.filter.outputs.backend }}
+      contract: ${{ steps.filter.outputs.contract }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
@@ -26,12 +33,41 @@ jobs:
           filters: |
             luau:
               - 'game/**'
+              - 'contracts/framework-manifest*.json'
+              - 'tools/ci/luau-check.sh'
+              # The Lune drift specs read these backend sources, so a change there must rerun them.
+              - 'backend/src/modules/telemetry/**'
+              - 'backend/src/modules/economy/**'
+              - 'backend/src/modules/flags/**'
+              - 'backend/migrations/005_flags.sql'
+              - '.github/workflows/ci.yml'
+            backend:
+              - 'backend/**'
               - 'contracts/**'
-              - 'tools/ci/**'
+              - 'tools/ci/backend-smoke.sh'
+              - 'tools/dockerfile-cmd.mjs'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'tsconfig.base.json'
+              - '.github/workflows/ci.yml'
+            # The game and the backend meet here, so a change on either side reruns the contract.
+            contract:
+              - 'game/**'
+              - 'backend/**'
+              - 'contracts/**'
+              - 'tools/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'tsconfig.base.json'
               - '.github/workflows/ci.yml'
 
   repo-hygiene:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -39,14 +75,17 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - name: Module size check tests
-        run: node --test tools/check-module-size.test.mjs
+      - name: Tool tests
+        run: node --test tools/check-module-size.test.mjs tools/setup-dev.test.mjs tools/dockerfile-cmd.test.mjs
       - name: Module size check (700 lines)
         run: node tools/check-module-size.mjs
+      # The pinned image scans the whole history. gitleaks-action scans "first PR commit^..head",
+      # which breaks on this repo because the imported identity-service history starts at a root
+      # commit with no parent. Known false positives are listed in .gitleaksignore.
       - name: Secret scan
-        uses: gitleaks/gitleaks-action@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          docker run --rm --user "$(id -u):$(id -g)" -v "$GITHUB_WORKSPACE:/repo"
+          zricethezav/gitleaks:v8.30.1 git /repo --redact --no-banner --exit-code 1
       - name: Markdown links (local files only)
         uses: lycheeverse/lychee-action@v2
         with:
@@ -57,6 +96,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.luau == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -78,3 +120,164 @@ jobs:
           name: Outpost-place
           path: game/build/Outpost.rbxl
           if-no-files-found: error
+
+  # Each matrix entry reports as backend (22) or backend (24). The required check is backend-ok below,
+  # because a skipped matrix job reports only as backend and would leave those two names pending.
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    services:
+      mysql:
+        image: mysql:8.4.11
+        env:
+          # A throwaway password for a throwaway CI container. Not a secret.
+          MYSQL_ROOT_PASSWORD: outpost-ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -poutpost-ci --silent"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+      redis:
+        image: redis:7.4.11-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=3s --health-retries=30
+    env:
+      # Root on the throwaway container, because the integration tests read INNODB_METRICS,
+      # which needs SYSTEM_VARIABLES_ADMIN.
+      TEST_MYSQL_URL: mysql://root:outpost-ci@127.0.0.1:3306
+      TEST_REDIS_URL: redis://127.0.0.1:6379/15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6 # reads the pnpm version from packageManager in package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm --filter @outpost/backend lint
+      - name: Typecheck
+        run: pnpm --filter @outpost/backend typecheck
+      - name: Unit tests
+        run: pnpm --filter @outpost/backend test:unit
+      - name: Integration tests on MySQL 8.4 and Redis 7.4
+        run: pnpm --filter @outpost/backend test:integration
+      - name: OpenAPI contract is current
+        run: pnpm --filter @outpost/backend openapi:check
+      - name: OpenAPI contract lints clean
+        run: npx --yes @redocly/cli@2.54.2 lint contracts/openapi.yaml
+      - name: Build
+        run: pnpm --filter @outpost/backend build
+      - name: Start the built server with the Dockerfile CMD, wait for readiness, stop it with SIGTERM
+        env:
+          # The image's environment. The script makes a throwaway signing key for this step only.
+          NODE_ENV: production
+          PORT: 3000
+          DATABASE_URL: mysql://root:outpost-ci@127.0.0.1:3306/outpost_smoke
+          # Its own Redis db, away from the integration tests' db 15.
+          REDIS_URL: redis://127.0.0.1:6379/14
+          OTEL_TRACES_EXPORTER: none
+          OTEL_METRICS_EXPORTER: none
+          OTEL_LOGS_EXPORTER: none
+        run: bash tools/ci/backend-smoke.sh
+
+  # The Lune contract suite against a real backend, booted the way its Docker image boots it. The same
+  # Suite runs against MockTransport in every unit run, so a drift between the mock and the backend fails
+  # one side or the other. tools/ci/backend-contract.sh holds every step, so it replays on a laptop.
+  game-backend-contract:
+    needs: changes
+    if: needs.changes.outputs.contract == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    services:
+      mysql:
+        image: mysql:8.4.11
+        env:
+          # A throwaway password for a throwaway CI container. Not a secret.
+          MYSQL_ROOT_PASSWORD: outpost-ci
+          MYSQL_DATABASE: outpost
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -poutpost-ci --silent"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+      redis:
+        image: redis:7.4.11-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=3s --health-retries=30
+    env:
+      NODE_ENV: test
+      LOG_LEVEL: warn
+      PORT: 3000
+      DATABASE_URL: mysql://root:outpost-ci@127.0.0.1:3306/outpost
+      REDIS_URL: redis://127.0.0.1:6379/0
+      OTEL_TRACES_EXPORTER: none
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6 # reads the pnpm version from packageManager in package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm --filter @outpost/backend build
+      - uses: CompeyDev/setup-rokit@v0.2.1
+        with:
+          path: game
+          token: ${{ github.token }}
+          cache: true
+      - name: Install pinned tools
+        working-directory: game
+        run: rokit install --no-trust-check
+      # Made fresh for every run and masked in the log. The seed stores only its hash.
+      - name: Make a throwaway game API key for this run
+        run: |
+          KEY="opk_game-server.$(openssl rand -hex 32)"
+          echo "::add-mask::$KEY"
+          echo "OUTPOST_GAME_API_KEY=$KEY" >> "$GITHUB_ENV"
+      - name: Migrate, seed, boot with the Dockerfile CMD, run the demo and the Lune contract suite twice, stop with SIGTERM
+        run: bash tools/ci/backend-contract.sh
+
+  # The one required check for the backend and the contract. It passes when every backend matrix entry
+  # and the contract job passed, or when a job was skipped because nothing it covers changed.
+  backend-ok:
+    needs: [changes, backend, game-backend-contract]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Backend and contract passed or were skipped
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          CONTRACT_RESULT: ${{ needs.game-backend-contract.result }}
+        run: |
+          echo "changes: $CHANGES_RESULT, backend: $BACKEND_RESULT, game-backend-contract: $CONTRACT_RESULT"
+          [ "$CHANGES_RESULT" = success ] || exit 1
+          for result in "$BACKEND_RESULT" "$CONTRACT_RESULT"; do
+            case "$result" in
+              success | skipped) ;;
+              *) exit 1 ;;
+            esac
+          done

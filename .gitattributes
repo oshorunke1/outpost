@@ -1,3 +1,5 @@
 * text=auto eol=lf
 # The vendored ProfileService must stay byte for byte identical to upstream, so git never touches its line endings.
 game/vendor/** -text
+# Third-party code. GitHub's language bar and code search should not count it as Outpost's own Luau.
+game/vendor/** linguist-vendored

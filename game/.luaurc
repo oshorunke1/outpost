@@ -4,6 +4,7 @@
 		"Shared": "src/ReplicatedStorage/Shared",
 		"Logic": "src/ReplicatedStorage/Shared/Logic",
 		"Configs": "src/ReplicatedStorage/Shared/Configs",
+		"ServerConfigs": "src/ServerStorage/Configs",
 		"Scripts": "scripts",
 		"Tests": "tests"
 	}

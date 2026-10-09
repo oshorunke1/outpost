@@ -1,0 +1,11 @@
+# Scrapes the private metrics port of the backend and the worker on the Compose network.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: outpost-backend
+    static_configs:
+      - targets: ["backend:9464"]
+  - job_name: outpost-worker
+    static_configs:
+      - targets: ["worker:9464"]

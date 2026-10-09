@@ -39,4 +39,17 @@ function OrbRules.CanCollect(Attempt: Attempt): (boolean, Refusal?)
 	return true, nil
 end
 
+-- The flag can speed orbs up or slow them down, but only between a quarter and four times.
+OrbRules.MinRespawnMultiplier = 0.25
+OrbRules.MaxRespawnMultiplier = 4
+
+-- How long a new orb takes to appear. The OrbSpawnMultiplier flag divides the base wait, and
+-- anything that is not a sensible positive number means the normal wait.
+function OrbRules.RespawnDelay(BaseSeconds: number, Multiplier: any): number
+	if type(Multiplier) ~= "number" or not IsFinite(Multiplier) or Multiplier <= 0 then
+		return BaseSeconds
+	end
+	return BaseSeconds / math.clamp(Multiplier, OrbRules.MinRespawnMultiplier, OrbRules.MaxRespawnMultiplier)
+end
+
 return OrbRules

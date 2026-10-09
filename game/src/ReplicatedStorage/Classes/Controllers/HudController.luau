@@ -5,6 +5,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local ItemId = require(ReplicatedStorage.Shared.Enums.ItemId)
+local CoinsDisplay = require(ReplicatedStorage.Shared.Logic.Economy.CoinsDisplay)
 local Shop = require(ReplicatedStorage.Shared.Configs.Shop)
 local NetClient = require(ReplicatedStorage.Classes.Util.NetClient)
 
@@ -49,7 +50,7 @@ function HudController:Start()
 	Gui.Parent = PlayerGui
 
 	NetClient.On("Profile.Snapshot", function(Snapshot: any)
-		CoinsLabel.Text = `Coins {Snapshot.Coins}`
+		CoinsLabel.Text = CoinsDisplay.Text(Snapshot.Coins, Snapshot.State)
 		local Owns = table.find(Snapshot.OwnedItems, FeaturedItem) ~= nil
 		BuyButton.Text = if Owns then `{Entry.DisplayName} owned` else BuyText
 	end)

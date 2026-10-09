@@ -1,0 +1,140 @@
+# Local development stack. Secrets come from the git-ignored .env at the repo root (pnpm setup:dev).
+# Run it through the root compose.yaml, which names the project and points at the .env.
+# Published ports are bound to 127.0.0.1 only. The metrics port 9464 is never published; Prometheus
+# scrapes it on the Compose network.
+
+x-backend-build: &backend-build
+  context: ..
+  dockerfile: backend/Dockerfile
+
+# The backend and the worker connect as the app user, never as root. Tracing is configured only
+# through these OTEL_ variables (zero code, ADR 0015).
+x-backend-env: &backend-env
+  NODE_ENV: development
+  DATABASE_URL: mysql://outpost:${MYSQL_APP_PASSWORD:?run pnpm setup:dev first}@mysql:3306/outpost
+  REDIS_URL: redis://redis:6379/0
+  LOG_LEVEL: info
+  METRICS_HOST: 0.0.0.0
+  TELEMETRY_API_LIMIT: ${TELEMETRY_API_LIMIT:-200:150}
+  OTEL_TRACES_EXPORTER: otlp
+  OTEL_METRICS_EXPORTER: none
+  OTEL_LOGS_EXPORTER: none
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  OTEL_NODE_DISABLED_INSTRUMENTATIONS: fs,dns,net
+
+services:
+  mysql:
+    image: mysql:8.4.11
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?run pnpm setup:dev first}
+      MYSQL_DATABASE: outpost
+      MYSQL_USER: outpost
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:?run pnpm setup:dev first}
+    ports:
+      - "127.0.0.1:3306:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  # noeviction: when Redis is full, writes fail loudly instead of silently dropping sessions,
+  # refresh families or unprocessed telemetry.
+  redis:
+    image: redis:7.4.11-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - redis-data:/data
+
+  # Runs migrations as root (triggers need it), then seeds the dev game client and operator, then exits.
+  migrate:
+    build: *backend-build
+    image: outpost-backend:dev
+    command: ["sh", "-c", "node dist/cli/migrate.js && node dist/cli/seed.js"]
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: mysql://root:${MYSQL_ROOT_PASSWORD:?run pnpm setup:dev first}@mysql:3306/outpost
+      OUTPOST_GAME_API_KEY: ${OUTPOST_GAME_API_KEY:?run pnpm setup:dev first}
+      OUTPOST_DEV_OPERATOR_EMAIL: ${OUTPOST_DEV_OPERATOR_EMAIL:-}
+      OUTPOST_DEV_OPERATOR_PASSWORD: ${OUTPOST_DEV_OPERATOR_PASSWORD:-}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    build: *backend-build
+    image: outpost-backend:dev
+    environment:
+      <<: *backend-env
+      OTEL_SERVICE_NAME: outpost-backend
+    # Longer than the 10 s shutdown deadline in lifecycle.ts, so the deadline logs and exits before SIGKILL.
+    stop_grace_period: 15s
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  worker:
+    build: *backend-build
+    image: outpost-backend:dev
+    command: ["node", "--import", "./dist/signals.js", "--import", "@opentelemetry/auto-instrumentations-node/register", "dist/worker.js"]
+    environment:
+      <<: *backend-env
+      OTEL_SERVICE_NAME: outpost-worker
+    # Longer than the 10 s shutdown deadline in lifecycle.ts, so the deadline logs and exits before SIGKILL.
+    stop_grace_period: 15s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9464/metrics"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.162.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      - jaeger
+
+  jaeger:
+    image: jaegertracing/jaeger:2.22.0
+    ports:
+      - "127.0.0.1:16686:16686"
+
+  prometheus:
+    image: prom/prometheus:v3.13.4
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - backend
+      - worker
+
+volumes:
+  mysql-data: {}
+  redis-data: {}

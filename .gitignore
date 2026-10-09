@@ -12,3 +12,6 @@ game/roblox.yml
 .DS_Store
 Thumbs.db
 .superpowers/
+dist/
+coverage/
+!.env.example

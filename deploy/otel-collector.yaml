@@ -1,0 +1,25 @@
+# Receives OTLP from the backend and worker and forwards traces to Jaeger over gRPC.
+# otlp_grpc is the exporter's name in this collector; the old name otlp is only a deprecated alias.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch: {}
+
+exporters:
+  otlp_grpc/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_grpc/jaeger]

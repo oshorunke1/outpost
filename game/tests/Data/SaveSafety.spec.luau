@@ -100,24 +100,24 @@ Describe("SaveSafety.TryUpdate", function()
 		local Data = Template.Fresh() :: any
 		local Alias = Data
 		local Ok = SaveSafety.TryUpdate(Data, function(Draft)
-			Draft.Coins += 5
+			Draft.Stats.OrbsCollected += 5
 			Draft.OwnedItems.RedHat = true
 		end)
 		Expect(Ok).ToBe(true)
-		Expect(Alias.Coins).ToBe(5)
+		Expect(Alias.Stats.OrbsCollected).ToBe(5)
 		Expect(Alias.OwnedItems.RedHat).ToBe(true)
-		Expect(Data.Coins).ToBe(5)
+		Expect(Data.Stats.OrbsCollected).ToBe(5)
 		Expect(Data.OwnedItems.RedHat).ToBe(true)
 	end)
 
 	It("refuses an unsafe change and leaves the data exactly as it was", function()
 		local Data = Template.Fresh() :: any
 		local Ok, Problem = SaveSafety.TryUpdate(Data, function(Draft)
-			Draft.Coins = NaN
-			Draft.Stats.OrbsCollected = 99
+			Draft.Stats.OrbsCollected = NaN
+			Draft.OwnedItems.RedHat = true
 		end)
 		Expect(Ok).ToBe(false)
-		Expect(Problem).ToBe("Data.Coins is NaN")
+		Expect(Problem).ToBe("Data.Stats.OrbsCollected is NaN")
 		Expect(Data).ToEqual(Template.Fresh())
 	end)
 
@@ -145,12 +145,12 @@ Describe("SaveSafety.TryUpdate", function()
 	It("refuses a change that throws and leaves the data alone", function()
 		local Data = Template.Fresh() :: any
 		local Ok, Problem = SaveSafety.TryUpdate(Data, function(Draft)
-			Draft.Coins = 50
+			Draft.Stats.OrbsCollected = 50
 			error("oops")
 		end)
 		Expect(Ok).ToBe(false)
 		Expect(string.find(Problem or "", "oops", 1, true) ~= nil).ToBe(true)
-		Expect(Data.Coins).ToBe(0)
+		Expect(Data.Stats.OrbsCollected).ToBe(0)
 	end)
 end)
 

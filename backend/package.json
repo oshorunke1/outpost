@@ -1,0 +1,55 @@
+{
+  "name": "@outpost/backend",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch src/server.ts",
+    "start": "node --import ./dist/signals.js --import @opentelemetry/auto-instrumentations-node/register dist/server.js",
+    "start:worker": "node --import ./dist/signals.js --import @opentelemetry/auto-instrumentations-node/register dist/worker.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test:unit": "vitest run --config vitest.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "migrate": "tsx src/cli/migrate.ts",
+    "seed": "tsx src/cli/seed.ts",
+    "openapi:export": "tsx scripts/export-openapi.ts",
+    "openapi:check": "tsx scripts/export-openapi.ts --check",
+    "demo": "tsx scripts/demo.ts"
+  },
+  "dependencies": {
+    "@fastify/swagger": "9.9.1",
+    "@node-rs/argon2": "2.2.2",
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/auto-instrumentations-node": "0.81.0",
+    "@opentelemetry/core": "2.12.0",
+    "@prometheus-io/client": "0.16.1",
+    "fastify": "5.12.5",
+    "fastify-type-provider-zod": "7.0.0",
+    "ioredis": "6.0.0",
+    "jose": "6.2.12",
+    "mysql2": "3.24.5",
+    "openapi-types": "12.1.3",
+    "pino": "10.4.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@opentelemetry/context-async-hooks": "2.12.0",
+    "@opentelemetry/instrumentation-http": "0.223.0",
+    "@opentelemetry/sdk-metrics": "2.12.0",
+    "@opentelemetry/sdk-trace-base": "2.12.0",
+    "@types/node": "22.20.5",
+    "eslint": "10.12.0",
+    "fast-check": "4.10.2",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.1",
+    "vite": "8.3.3",
+    "vitest": "5.0.3"
+  }
+}

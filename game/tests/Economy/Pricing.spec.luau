@@ -1,4 +1,5 @@
 --!strict
+local Fs = require("@lune/fs")
 local Harness = require("@Tests/Harness")
 local ItemId = require("@Shared/Enums/ItemId")
 local Pricing = require("@Logic/Economy/Pricing")
@@ -137,6 +138,28 @@ Describe("Pricing.CheckCatalog", function()
 	It("rejects an enum value that doesn't map to itself", function()
 		local BadIds = { Hat = "Cap" }
 		Expect((Pricing.CheckCatalog(Catalog, BadIds))).ToBe(false)
+	end)
+end)
+
+Describe("Configs/Shop", function()
+	-- The backend charges what its CATALOG says and the game shows what Configs/Shop says, and the
+	-- Studio mock charges from Configs/Shop too. So the two lists must match, item by item.
+	It("every item and price matches CATALOG in the backend's catalog.ts", function()
+		local Source = Fs.readFile("../backend/src/modules/economy/catalog.ts")
+		local Body = string.match(Source, "export const CATALOG = %{(.-)%} as const")
+		assert(Body ~= nil, "CATALOG is missing from catalog.ts")
+		local Backend: { [string]: number } = {}
+		for Item, Price in string.gmatch(Body, "(%w+): %{ price: (%d+) %}") do
+			assert(Backend[Item] == nil, `{Item} shows up twice`)
+			Backend[Item] = tonumber(Price) :: number
+		end
+		for Item, Entry in Shop do
+			Expect(Backend[Item]).ToBe(Entry.Price)
+		end
+		for Item, Price in Backend do
+			Expect(Shop[Item] and Shop[Item].Price).ToBe(Price)
+		end
+		Expect(next(Backend) ~= nil).ToBe(true)
 	end)
 end)
 

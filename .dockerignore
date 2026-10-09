@@ -1,0 +1,16 @@
+# The build context is the repo root (docker build -f backend/Dockerfile .). Only the workspace files
+# and backend/ are needed, and no .env file may ever reach an image layer.
+.git
+.github
+.superpowers
+**/.env
+**/.env.*
+!.env.example
+**/node_modules
+**/dist
+**/coverage
+game
+docs
+evals
+mcp
+tools

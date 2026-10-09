@@ -1,0 +1,6 @@
+# Lets `docker compose up` work from the repo root. The real file is deploy/docker-compose.yml,
+# and it reads its secrets from the root .env written by pnpm setup:dev.
+name: outpost
+include:
+  - path: deploy/docker-compose.yml
+    env_file: .env

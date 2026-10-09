@@ -2,6 +2,10 @@
 -- OrbService spawns glowing orbs around the map and pays Coins when a player picks one up.
 -- The client only says which orb it touched. The server checks the orb still exists, measures the
 -- distance itself, and enforces a cooldown before paying anything.
+-- On a ledger server the Coins go to EconomyService, which batches them to the backend ledger.
+-- A player still on the old save gets them in the save, and a paused player gets none.
+-- Every pickup is tracked as orb_collected with the Coins it paid. The OrbSpawnMultiplier flag
+-- makes new orbs come faster or slower, inside the bounds in OrbRules.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -10,7 +14,10 @@ local ServerStorage = game:GetService("ServerStorage")
 local OrbRules = require(ReplicatedStorage.Shared.Logic.Economy.OrbRules)
 local Packets = require(ReplicatedStorage.Shared.Net.Packets)
 local DataService = require(ServerStorage.Classes.Services.DataService)
+local EconomyService = require(ServerStorage.Classes.Services.EconomyService)
 local NetGuard = require(ServerStorage.Classes.Util.NetGuard)
+local FlagService = require(ServerStorage.Classes.Services.FlagService)
+local TelemetryService = require(ServerStorage.Classes.Services.TelemetryService)
 
 local OrbCount = 12
 local MinSpawnRadius = 8
@@ -87,14 +94,20 @@ local function OnCollect(Player: Player, Payload: { OrbId: number })
 	Orb:Destroy()
 	LastCollectAt[Player.UserId] = Now
 
-	local Paid = DataService:Update(Player, function(Data)
-		Data.Coins += OrbRules.CoinsPerOrb
+	local Economy = DataService:EconomyFor(Player)
+	if Economy == "Ledger" then
+		EconomyService:Earn(Player, OrbRules.CoinsPerOrb)
+	end
+	local Paid = if Economy == "Ledger" or Economy == "Legacy" then OrbRules.CoinsPerOrb else 0
+	TelemetryService:Track("orb_collected", Player.UserId, Paid)
+	DataService:Update(Player, function(Data)
+		if Economy == "Legacy" then
+			Data.Coins = (Data.Coins or 0) + OrbRules.CoinsPerOrb
+		end
 		Data.Stats.OrbsCollected += 1
 	end)
-	if Paid then
-		DataService:PushSnapshot(Player)
-	end
-	task.delay(RespawnSeconds, SpawnOrb)
+	DataService:PushSnapshot(Player)
+	task.delay(OrbRules.RespawnDelay(RespawnSeconds, FlagService:Value("OrbSpawnMultiplier")), SpawnOrb)
 end
 
 function OrbService:Init()

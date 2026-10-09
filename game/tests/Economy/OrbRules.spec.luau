@@ -76,4 +76,22 @@ Describe("OrbRules.CanCollect", function()
 	end)
 end)
 
+Describe("OrbRules.RespawnDelay", function()
+	It("scales with the flag and clamps it", function()
+		Expect(OrbRules.RespawnDelay(3, 1)).ToBe(3)
+		Expect(OrbRules.RespawnDelay(3, 2)).ToBe(1.5)
+		Expect(OrbRules.RespawnDelay(3, 4)).ToBe(0.75)
+		Expect(OrbRules.RespawnDelay(3, 100)).ToBe(0.75)
+		Expect(OrbRules.RespawnDelay(3, 0.25)).ToBe(12)
+		Expect(OrbRules.RespawnDelay(3, 0.01)).ToBe(12)
+	end)
+
+	It("ignores a broken multiplier", function()
+		for _, Bad in { NaN, 0, -2, math.huge, -math.huge, "2", true } :: { any } do
+			Expect(OrbRules.RespawnDelay(3, Bad)).ToBe(3)
+		end
+		Expect(OrbRules.RespawnDelay(3, nil)).ToBe(3)
+	end)
+end)
+
 return nil

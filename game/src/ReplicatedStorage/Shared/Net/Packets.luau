@@ -34,6 +34,8 @@ local List: { PacketDef } = {
 			Kind = "Struct",
 			Fields = {
 				Coins = { Kind = "Integer", Min = 0, Max = 1000000000 },
+				-- Ready, Loading or Paused, see CoinsDisplay.
+				State = { Kind = "String", MaxLength = 16 },
 				OwnedItems = { Kind = "List", MaxLength = 64, Item = { Kind = "Enum", Enum = "ItemId" } },
 			},
 		},
