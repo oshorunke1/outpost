@@ -115,19 +115,10 @@ local function JoinLoop(UserId: number)
 	local LeftAt: number? = nil
 	while true do
 		local Here = LoadedPlayer(UserId) ~= nil
-		if not Running:IsJoined(UserId) then
-			if not Here and Running:HeldCoins(UserId) == 0 then
-				break
-			end
-			if Running:Join(UserId) then
-				PushFor(UserId)
-			end
-		end
-		if Running:IsJoined(UserId) then
-			if not Here or Running:AfterJoin(UserId) then
-				PushFor(UserId)
-				break
-			end
+		local Step = Running:JoinStep(UserId, Here)
+		PushFor(UserId)
+		if Step == "Done" then
+			break
 		end
 		if not Here then
 			LeftAt = LeftAt or os.clock()

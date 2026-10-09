@@ -489,6 +489,32 @@ function EconomyCore.AfterJoin(self: EconomyCore, UserId: number): boolean
 	return Progress.Reconciled and Progress.Legacy
 end
 
+-- One pass of the join loop. Here says whether the player is still in the server. Done means stop,
+-- Retry means wait and call again. A player who left is only joined while Coins are held for them,
+-- and the steps after the join only run for a player who is here. If the backend forgot the join
+-- while those steps ran, it says Retry so the next pass joins again.
+function EconomyCore.JoinStep(self: EconomyCore, UserId: number, Here: boolean): "Done" | "Retry"
+	if not self.Joined[UserId] then
+		if not Here and self:HeldCoins(UserId) == 0 then
+			return "Done"
+		end
+		if not self:Join(UserId) then
+			return "Retry"
+		end
+	end
+	if not Here then
+		return "Done"
+	end
+	if not self:AfterJoin(UserId) then
+		return "Retry"
+	end
+	if not self.Joined[UserId] then
+		self.Deps.Warn(`the backend lost the join for {UserId}, joining again`)
+		return "Retry"
+	end
+	return "Done"
+end
+
 -- A new visit starts. The player joins the backend again, which fetches their balance, and the
 -- steps after the join run again. This happens when they arrive, not when they leave, because
 -- batches still retrying after a leave need the old join to keep going.

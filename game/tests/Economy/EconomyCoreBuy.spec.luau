@@ -206,6 +206,20 @@ Describe("EconomyCore purchases", function()
 		Expect(Deadlines).ToEqual({ 3 })
 	end)
 
+	It("a step that throws still frees the lock, so the next click can buy", function()
+		local Rig = EconomyRig.new()
+		Rig.Player(1001)
+		Seed(Rig, 1001, 30)
+		local Owned = Rig.Core.Deps.Save.Owned
+		Rig.Core.Deps.Save.Owned = function(_UserId: number): any
+			error("save blew up")
+		end
+		Expect(Rig.Core:Purchase(1001, "RedHat").Action).ToBe("RetryLater")
+		Expect(#Rig.Warnings).ToBe(1)
+		Rig.Core.Deps.Save.Owned = Owned
+		Expect(Rig.Core:Purchase(1001, "RedHat").Action).ToBe("Grant")
+	end)
+
 	It("a throwing acknowledge is just a failed one", function()
 		local Rig = EconomyRig.new()
 		Expect(Rig.Core:Acknowledge("not-a-uuid")).ToBe(false)
@@ -352,6 +366,14 @@ Describe("EconomyCore legacy credit", function()
 		Expect(#Rig.Warnings).ToBe(1)
 	end)
 
+	It("a balance of exactly the cap is credited in full", function()
+		local Rig = EconomyRig.new()
+		Rig.Player(1001, { OwnedItems = {}, LegacyCoins = 1000000 })
+		Expect(Rig.Core:CreditLegacy(1001)).ToBe("Done")
+		Expect(#Rig.Sent("legacy")).ToBe(1000)
+		Expect(Rig.Wallet(1001)).ToBe(1000000)
+	end)
+
 	It("a balance over the cap is left in the save for an operator with nothing sent", function()
 		local Rig = EconomyRig.new()
 		Rig.Player(1001, { OwnedItems = {}, LegacyCoins = 1000001 })
@@ -393,6 +415,48 @@ Describe("EconomyCore after the join", function()
 		Expect(#Rig.Sent("unfulfilled")).ToBe(2)
 		Expect(#Rig.Sent("legacy")).ToBe(1)
 		Expect(Rig.Wallet(1001)).ToBe(40)
+	end)
+
+	It("JoinStep joins, settles and is Done, and Retry while the join fails", function()
+		local Rig = EconomyRig.new()
+		Rig.Player(1001, nil, false)
+		Rig.Controls.FailNext(503, "unavailable", nil, 3)
+		Expect(Rig.Core:JoinStep(1001, true)).ToBe("Retry")
+		Expect(Rig.Core:JoinStep(1001, true)).ToBe("Done")
+		Expect(Rig.Core:IsJoined(1001)).ToBe(true)
+	end)
+
+	It("JoinStep never swallows a rejoin asked for while the steps ran", function()
+		local Rig = EconomyRig.new()
+		Rig.Player(1001, nil, false)
+		Expect(Rig.Core:Join(1001)).ToBe(true)
+		local Owned = Rig.Core.Deps.Save.Owned
+		local Once = false
+		Rig.Core.Deps.Save.Owned = function(UserId: number)
+			if not Once then
+				Once = true
+				-- An earn finds the backend forgot the join while the reconcile runs.
+				Rig.Controls.FailNext(404, "player_not_found")
+				Rig.Core:Earn(1001, 200)
+			end
+			return Owned(UserId)
+		end
+		Expect(Rig.Core:JoinStep(1001, true)).ToBe("Retry")
+		Expect(#Rig.Warnings).ToBe(1)
+		Expect(Rig.Core:JoinStep(1001, true)).ToBe("Done")
+		Expect(Rig.Wallet(1001)).ToBe(200)
+		Expect(Rig.Core:HeldCoins(1001)).ToBe(0)
+	end)
+
+	It("JoinStep for a player who left only joins while Coins are held for them", function()
+		local Rig = EconomyRig.new()
+		Rig.Player(1001, nil, false)
+		Expect(Rig.Core:JoinStep(1001, false)).ToBe("Done")
+		Expect(#Rig.Sent("join")).ToBe(0)
+		Rig.Core:Earn(1001, 200)
+		Expect(Rig.Core:JoinStep(1001, false)).ToBe("Done")
+		Expect(Rig.Wallet(1001)).ToBe(200)
+		Expect(#Rig.Sent("unfulfilled")).ToBe(0)
 	end)
 
 	It("is never settled before the join lands", function()
