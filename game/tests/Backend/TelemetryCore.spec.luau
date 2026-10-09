@@ -267,6 +267,22 @@ Describe("TelemetryCore health events", function()
 		Expect(States).ToEqual({ "Open", "HalfOpen", "Closed" })
 	end)
 
+	It("a player already here at start and also seen by PlayerAdded joins once, and a rejoin joins again", function()
+		local Rig = NewRig()
+		-- PlayerAdded fires and then the sweep of players already here finds the same player.
+		Rig.Core:PlayerJoined(1001)
+		Rig.Core:PlayerJoined(1001)
+		Rig.Core:PlayerJoined(1002)
+		Rig.Core:PlayerLeft(1001)
+		Rig.Core:PlayerJoined(1001)
+		Rig.Core:Flush(10)
+		local Seen = {}
+		for _, Event in Rig.Events() do
+			table.insert(Seen, `{Event.name} {Event.userId}`)
+		end
+		Expect(Seen).ToEqual({ "player_join 1001", "player_join 1002", "player_leave 1001", "player_join 1001" })
+	end)
+
 	It("NetGuard drops are capped server wide in each window, and the skipped ones are warned once", function()
 		local Rig = NewRig()
 		local Cap = TelemetryCore.MaxNetGuardDropsPerWindow

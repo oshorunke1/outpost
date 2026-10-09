@@ -74,7 +74,7 @@
       "hasInit": true,
       "hasStart": true,
       "kind": "service",
-      "lineCount": 106,
+      "lineCount": 111,
       "listens": [],
       "name": "TelemetryService",
       "path": "game/src/ServerStorage/Classes/Services/TelemetryService.luau"

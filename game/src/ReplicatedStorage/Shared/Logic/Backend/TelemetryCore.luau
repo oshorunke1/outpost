@@ -43,6 +43,8 @@ type Fields = {
 	DropWindowStart: number,
 	DropsInWindow: number,
 	DropsSkipped: number,
+	-- Players whose join was tracked and who have not left yet.
+	Present: { [number]: true },
 }
 
 local TelemetryCore = {}
@@ -63,6 +65,7 @@ function TelemetryCore.new(Deps: Deps): TelemetryCore
 		DropWindowStart = -math.huge,
 		DropsInWindow = 0,
 		DropsSkipped = 0,
+		Present = {},
 	}
 	return setmetatable(Object, TelemetryCore)
 end
@@ -85,6 +88,22 @@ end
 -- How many events are waiting to go out.
 function TelemetryCore.Pending(self: TelemetryCore): number
 	return self.Deps.Buffer:Count()
+end
+
+-- A player is in the server. Tracks player_join once per visit, so a player that PlayerAdded and
+-- the start up sweep of players already here both report is only counted once.
+function TelemetryCore.PlayerJoined(self: TelemetryCore, UserId: number)
+	if self.Present[UserId] then
+		return
+	end
+	self.Present[UserId] = true
+	self:Track("player_join", UserId)
+end
+
+-- A player is leaving. The next PlayerJoined for them is a new visit.
+function TelemetryCore.PlayerLeft(self: TelemetryCore, UserId: number)
+	self.Present[UserId] = nil
+	self:Track("player_leave", UserId)
 end
 
 -- A packet NetGuard dropped and logged. Only a real packet name and a known reason are kept, and

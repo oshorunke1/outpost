@@ -80,11 +80,16 @@ function TelemetryService:Init()
 	})
 	Core = Running
 	Players.PlayerAdded:Connect(function(Player: Player)
-		Running:Track("player_join", Player.UserId)
+		Running:PlayerJoined(Player.UserId)
 	end)
 	Players.PlayerRemoving:Connect(function(Player: Player)
-		Running:Track("player_leave", Player.UserId)
+		Running:PlayerLeft(Player.UserId)
 	end)
+	-- Players who got in before this service started still count as joined. One that PlayerAdded
+	-- also reports is only tracked once.
+	for _, Player in Players:GetPlayers() do
+		Running:PlayerJoined(Player.UserId)
+	end
 	NetGuard.SetDropObserver(function(Player: Player, PacketName: string, Reason: string)
 		Running:NetGuardDrop(Player.UserId, PacketName, Reason)
 	end)
