@@ -5,7 +5,7 @@
       "hasInit": true,
       "hasStart": false,
       "kind": "service",
-      "lineCount": 222,
+      "lineCount": 237,
       "listens": [
         "Profile.RequestSnapshot"
       ],

@@ -18,6 +18,7 @@ local Migrations = require(Shared.Logic.Data.Migrations)
 local Migrator = require(Shared.Logic.Data.Migrator)
 local Places = require(Shared.Configs.Places)
 local SaveSafety = require(Shared.Logic.Data.SaveSafety)
+local SaveSeq = require(Shared.Logic.Data.SaveSeq)
 local StoreSelector = require(Shared.Logic.Data.StoreSelector)
 local SaveGate = require(Shared.Logic.Data.SaveGate)
 local Template = require(Shared.Logic.Data.Template)
@@ -30,6 +31,9 @@ type ProfileData = Template.ProfileData
 
 local DataService = {}
 DataService.Priority = 10
+
+-- How often SaveNow asks ProfileService again while it waits.
+local SaveAgainSeconds = 5
 
 local ActiveStore: any = nil
 local Profiles: { [Player]: any } = {}
@@ -177,21 +181,32 @@ function DataService:SetCoinsSource(Source: (Player: Player) -> number)
 	CoinsSource = Source
 end
 
--- Asks ProfileService to write the save now and waits until a save lands, for at most
--- TimeoutSeconds. True means the save as it is now is in the DataStore. The legacy credit uses
--- this, so the save that holds LegacyCoins is stored before any of them reach the ledger.
+-- Writes the save now and waits until that write lands, for at most TimeoutSeconds.
+-- True means a DataStore save that read the data after this call began is stored, so everything
+-- in the save at the moment of the call is durable. It uses a SaveSeq meta tag, so a save that
+-- was already on its way, or an autosave of older data, never counts. False means it did not land
+-- in time, or this server lost the save to another one.
 function DataService:SaveNow(Player: Player, TimeoutSeconds: number): boolean
 	local Profile = Profiles[Player]
 	if Profile == nil then
 		return false
 	end
+	local Wanted = SaveSeq.Next(Profile.MetaData.MetaTags)
+	Profile:SetMetaTag(SaveSeq.Tag, Wanted)
 	local Landed = false
-	local Connection = Profile.MetaTagsUpdated:Connect(function()
-		Landed = true
+	local Connection = Profile.MetaTagsUpdated:Connect(function(Latest)
+		if SaveSeq.Landed(Latest, Wanted) then
+			Landed = true
+		end
 	end)
-	Profile:Save()
 	local Started = os.clock()
+	local AskedAt = -math.huge
 	while not Landed and Profiles[Player] == Profile and os.clock() - Started < TimeoutSeconds do
+		-- Save ignores a call while another write is queued, so it is asked again now and then.
+		if os.clock() - AskedAt >= SaveAgainSeconds then
+			AskedAt = os.clock()
+			Profile:Save()
+		end
 		task.wait(0.25)
 	end
 	Connection:Disconnect()
