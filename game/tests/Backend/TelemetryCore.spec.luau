@@ -201,6 +201,19 @@ Describe("TelemetryCore sending", function()
 		Expect(Rig.Core:Pending()).ToBe(0)
 	end)
 
+	It("FlushAll gives each batch only the time left, so the shared shutdown window holds", function()
+		local Rig = NewRig()
+		for UserId = 1, 1200 do
+			Rig.Core:Track("player_join", UserId)
+		end
+		-- Every try is told to wait 6 seconds. The first batch waits once and gives up at 6 seconds.
+		-- The next batches have 4 seconds left, so they must give up without waiting again.
+		Rig.Controls.FailNext(503, "unavailable", 6, 100)
+		Rig.Core:FlushAll(10)
+		Expect(Rig.Clock.Now <= 10).ToBe(true)
+		Expect(Rig.Clock.Now).ToBe(6)
+	end)
+
 	It("FlushAll stops when its time is up", function()
 		local Rig = NewRig()
 		for UserId = 1, 1200 do
