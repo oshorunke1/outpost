@@ -9,6 +9,8 @@
 -- A Now that is NaN or infinite is ignored, so a broken clock can never open, close or unlock it.
 -- Only no answer at all and 5xx errors count as failures. A 429 means the backend is alive and
 -- asking us to slow down, so it never opens the breaker. Use RecordResult to get that sorting for free.
+-- A 408 or 425 is neutral. The backend answered but did no work, so it neither counts as a failure
+-- nor proves the backend healthy enough to close a half open breaker.
 
 export type State = "Closed" | "Open" | "HalfOpen"
 
@@ -54,6 +56,11 @@ function CircuitBreaker.CountsAsFailure(Status: number): boolean
 	return Status == 0 or (Status >= 500 and Status <= 599)
 end
 
+-- True for the answers that say nothing either way, a request timeout (408) and too early (425).
+function CircuitBreaker.IsNeutral(Status: number): boolean
+	return Status == 408 or Status == 425
+end
+
 function CircuitBreaker.Allow(self: CircuitBreaker, Now: number): boolean
 	if self.Current == "Closed" then
 		return true
@@ -76,6 +83,8 @@ function CircuitBreaker.Allow(self: CircuitBreaker, Now: number): boolean
 	return true
 end
 
+-- A success closes the breaker even while it is open. That covers a call that was already in flight
+-- when the breaker opened and then got a real answer, which proves the backend is up after all.
 function CircuitBreaker.RecordSuccess(self: CircuitBreaker, _Now: number)
 	self.Current = "Closed"
 	self.Failures = 0
@@ -101,9 +110,16 @@ end
 
 -- Records a finished call by its HTTP status. A 5xx or no answer is a failure, and any other real
 -- answer, 429 included, is a success because the backend is clearly up. A local refusal below zero
--- never reached the backend, so it changes nothing.
+-- never reached the backend, so it changes nothing. A neutral 408 or 425 changes nothing either,
+-- except that a half open breaker frees its probe slot so the next call can probe again.
 function CircuitBreaker.RecordResult(self: CircuitBreaker, Now: number, Status: number)
 	if Status ~= Status or Status < 0 then
+		return
+	end
+	if CircuitBreaker.IsNeutral(Status) then
+		if self.Current == "HalfOpen" then
+			self.ProbeStartedAt = nil
+		end
 		return
 	end
 	if CircuitBreaker.CountsAsFailure(Status) then

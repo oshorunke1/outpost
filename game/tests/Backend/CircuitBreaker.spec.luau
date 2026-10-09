@@ -198,6 +198,78 @@ Describe("CircuitBreaker:RecordResult", function()
 		Probing:RecordResult(31, -2)
 		Expect(Probing:State()).ToBe("HalfOpen")
 	end)
+
+	-- Review M2. A NaN status is not a real answer, so it must not close a half open breaker.
+	It("a NaN status changes nothing, even mid probe", function()
+		local Probing = Opened()
+		Probing:Allow(30)
+		Probing:RecordResult(31, NaN)
+		Expect(Probing:State()).ToBe("HalfOpen")
+		local Fresh = CircuitBreaker.new(1, 30)
+		Fresh:RecordResult(0, NaN)
+		Expect(Fresh:State()).ToBe("Closed")
+	end)
+
+	It("a 408 or 425 neither resets a run of failures nor adds to it", function()
+		for _, Status in { 408, 425 } do
+			local Breaker = CircuitBreaker.new(3, 30)
+			Breaker:RecordResult(0, 503)
+			Breaker:RecordResult(0, 503)
+			Breaker:RecordResult(0, Status)
+			Breaker:RecordResult(0, Status)
+			Expect(Breaker:State()).ToBe("Closed")
+			Breaker:RecordResult(0, 503)
+			Expect(Breaker:State()).ToBe("Open")
+		end
+	end)
+
+	It("a half open probe that gets a 408 or 425 stays half open and frees the probe slot", function()
+		for _, Status in { 408, 425 } do
+			local Breaker = Opened()
+			Expect(Breaker:Allow(30)).ToBe(true)
+			Breaker:RecordResult(31, Status)
+			Expect(Breaker:State()).ToBe("HalfOpen")
+			Expect(Breaker:Allow(32)).ToBe(true)
+			Expect(Breaker:Allow(33)).ToBe(false)
+		end
+	end)
+
+	It("a 408 or 425 while open changes nothing", function()
+		local Breaker = Opened()
+		Breaker:RecordResult(10, 408)
+		Expect(Breaker:State()).ToBe("Open")
+		Expect(Breaker:Allow(29)).ToBe(false)
+	end)
+end)
+
+Describe("CircuitBreaker.IsNeutral", function()
+	It("only a request timeout and too early are neutral", function()
+		Expect(CircuitBreaker.IsNeutral(408)).ToBe(true)
+		Expect(CircuitBreaker.IsNeutral(425)).ToBe(true)
+		for _, Status in { 0, 200, 204, 400, 401, 404, 409, 422, 429, 500, 503, -1, -2 } do
+			Expect(CircuitBreaker.IsNeutral(Status)).ToBe(false)
+		end
+	end)
+end)
+
+Describe("CircuitBreaker late answers", function()
+	-- Review M1. Calls that were already in flight when the breaker opened can fail afterwards.
+	-- They must not push the cooldown further out.
+	It("a late failure while open leaves the cooldown alone", function()
+		local Breaker = Opened()
+		Breaker:RecordFailure(20)
+		Breaker:RecordResult(25, 503)
+		Expect(Breaker:Allow(30)).ToBe(true)
+		Expect(Breaker:State()).ToBe("HalfOpen")
+	end)
+
+	-- Review M2. Picked on purpose. A real answer proves the backend is up, so it closes at once.
+	It("a late success while open closes it, since the backend clearly answered", function()
+		local Breaker = Opened()
+		Breaker:RecordSuccess(10)
+		Expect(Breaker:State()).ToBe("Closed")
+		Expect(Breaker:Allow(10)).ToBe(true)
+	end)
 end)
 
 return nil
