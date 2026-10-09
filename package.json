@@ -10,7 +10,7 @@
   },
   "scripts": {
     "check:size": "node tools/check-module-size.mjs",
-    "test:tools": "node --test tools/check-module-size.test.mjs tools/setup-dev.test.mjs",
+    "test:tools": "node --test tools/check-module-size.test.mjs tools/setup-dev.test.mjs tools/dockerfile-cmd.test.mjs",
     "setup:dev": "node tools/setup-dev.mjs"
   }
 }
