@@ -13,6 +13,15 @@
       "path": "game/src/ServerStorage/Classes/Services/DataService.luau"
     },
     {
+      "hasInit": true,
+      "hasStart": true,
+      "kind": "service",
+      "lineCount": 313,
+      "listens": [],
+      "name": "EconomyService",
+      "path": "game/src/ServerStorage/Classes/Services/EconomyService.luau"
+    },
+    {
       "hasInit": false,
       "hasStart": true,
       "kind": "controller",
@@ -34,7 +43,7 @@
       "hasInit": true,
       "hasStart": true,
       "kind": "service",
-      "lineCount": 121,
+      "lineCount": 125,
       "listens": [
         "Orb.Collect"
       ],
@@ -45,7 +54,7 @@
       "hasInit": true,
       "hasStart": false,
       "kind": "service",
-      "lineCount": 43,
+      "lineCount": 51,
       "listens": [
         "Shop.Buy"
       ],

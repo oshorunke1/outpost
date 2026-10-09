@@ -2,6 +2,8 @@
 -- OrbService spawns glowing orbs around the map and pays Coins when a player picks one up.
 -- The client only says which orb it touched. The server checks the orb still exists, measures the
 -- distance itself, and enforces a cooldown before paying anything.
+-- On a ledger server the Coins go to EconomyService, which batches them to the backend ledger.
+-- A player still on the old save gets them in the save, and a paused player gets none.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -10,6 +12,7 @@ local ServerStorage = game:GetService("ServerStorage")
 local OrbRules = require(ReplicatedStorage.Shared.Logic.Economy.OrbRules)
 local Packets = require(ReplicatedStorage.Shared.Net.Packets)
 local DataService = require(ServerStorage.Classes.Services.DataService)
+local EconomyService = require(ServerStorage.Classes.Services.EconomyService)
 local NetGuard = require(ServerStorage.Classes.Util.NetGuard)
 
 local OrbCount = 12
@@ -87,16 +90,17 @@ local function OnCollect(Player: Player, Payload: { OrbId: number })
 	Orb:Destroy()
 	LastCollectAt[Player.UserId] = Now
 
-	local Legacy = DataService:EconomyFor(Player) == "Legacy"
-	local Paid = DataService:Update(Player, function(Data)
-		if Legacy then
+	local Economy = DataService:EconomyFor(Player)
+	if Economy == "Ledger" then
+		EconomyService:Earn(Player, OrbRules.CoinsPerOrb)
+	end
+	DataService:Update(Player, function(Data)
+		if Economy == "Legacy" then
 			Data.Coins = (Data.Coins or 0) + OrbRules.CoinsPerOrb
 		end
 		Data.Stats.OrbsCollected += 1
 	end)
-	if Paid then
-		DataService:PushSnapshot(Player)
-	end
+	DataService:PushSnapshot(Player)
 	task.delay(RespawnSeconds, SpawnOrb)
 end
 
