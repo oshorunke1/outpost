@@ -24,6 +24,7 @@ jobs:
     outputs:
       luau: ${{ steps.filter.outputs.luau }}
       backend: ${{ steps.filter.outputs.backend }}
+      contract: ${{ steps.filter.outputs.contract }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
@@ -45,6 +46,17 @@ jobs:
               - 'contracts/**'
               - 'tools/ci/backend-smoke.sh'
               - 'tools/dockerfile-cmd.mjs'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'tsconfig.base.json'
+              - '.github/workflows/ci.yml'
+            # The game and the backend meet here, so a change on either side reruns the contract.
+            contract:
+              - 'game/**'
+              - 'backend/**'
+              - 'contracts/**'
+              - 'tools/**'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
@@ -180,24 +192,92 @@ jobs:
           OTEL_LOGS_EXPORTER: none
         run: bash tools/ci/backend-smoke.sh
 
-  # The one required check for the backend. It passes when every backend matrix entry passed, or
-  # when the backend job was skipped because nothing it covers changed.
+  # The Lune contract suite against a real backend, booted the way its Docker image boots it. The same
+  # Suite runs against MockTransport in every unit run, so a drift between the mock and the backend fails
+  # one side or the other. tools/ci/backend-contract.sh holds every step, so it replays on a laptop.
+  game-backend-contract:
+    needs: changes
+    if: needs.changes.outputs.contract == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    services:
+      mysql:
+        image: mysql:8.4.11
+        env:
+          # A throwaway password for a throwaway CI container. Not a secret.
+          MYSQL_ROOT_PASSWORD: outpost-ci
+          MYSQL_DATABASE: outpost
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -poutpost-ci --silent"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+      redis:
+        image: redis:7.4.11-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=3s --health-retries=30
+    env:
+      NODE_ENV: test
+      LOG_LEVEL: warn
+      PORT: 3000
+      DATABASE_URL: mysql://root:outpost-ci@127.0.0.1:3306/outpost
+      REDIS_URL: redis://127.0.0.1:6379/0
+      OTEL_TRACES_EXPORTER: none
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6 # reads the pnpm version from packageManager in package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm --filter @outpost/backend build
+      - uses: CompeyDev/setup-rokit@v0.2.1
+        with:
+          path: game
+          token: ${{ github.token }}
+          cache: true
+      - name: Install pinned tools
+        working-directory: game
+        run: rokit install --no-trust-check
+      # Made fresh for every run and masked in the log. The seed stores only its hash.
+      - name: Make a throwaway game API key for this run
+        run: |
+          KEY="opk_game-server.$(openssl rand -hex 32)"
+          echo "::add-mask::$KEY"
+          echo "OUTPOST_GAME_API_KEY=$KEY" >> "$GITHUB_ENV"
+      - name: Migrate, seed, boot with the Dockerfile CMD, run the demo and the Lune contract suite twice, stop with SIGTERM
+        run: bash tools/ci/backend-contract.sh
+
+  # The one required check for the backend and the contract. It passes when every backend matrix entry
+  # and the contract job passed, or when a job was skipped because nothing it covers changed.
   backend-ok:
-    needs: [changes, backend]
+    needs: [changes, backend, game-backend-contract]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
     steps:
-      - name: Backend passed or was skipped
+      - name: Backend and contract passed or were skipped
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
           BACKEND_RESULT: ${{ needs.backend.result }}
+          CONTRACT_RESULT: ${{ needs.game-backend-contract.result }}
         run: |
-          echo "changes: $CHANGES_RESULT, backend: $BACKEND_RESULT"
+          echo "changes: $CHANGES_RESULT, backend: $BACKEND_RESULT, game-backend-contract: $CONTRACT_RESULT"
           [ "$CHANGES_RESULT" = success ] || exit 1
-          case "$BACKEND_RESULT" in
-            success | skipped) exit 0 ;;
-            *) exit 1 ;;
-          esac
+          for result in "$BACKEND_RESULT" "$CONTRACT_RESULT"; do
+            case "$result" in
+              success | skipped) ;;
+              *) exit 1 ;;
+            esac
+          done
