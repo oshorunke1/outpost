@@ -87,8 +87,11 @@ local function OnCollect(Player: Player, Payload: { OrbId: number })
 	Orb:Destroy()
 	LastCollectAt[Player.UserId] = Now
 
+	local Legacy = DataService:EconomyFor(Player) == "Legacy"
 	local Paid = DataService:Update(Player, function(Data)
-		Data.Coins += OrbRules.CoinsPerOrb
+		if Legacy then
+			Data.Coins = (Data.Coins or 0) + OrbRules.CoinsPerOrb
+		end
 		Data.Stats.OrbsCollected += 1
 	end)
 	if Paid then

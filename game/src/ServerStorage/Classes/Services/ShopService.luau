@@ -15,14 +15,16 @@ local ShopService = {}
 local function OnBuy(Player: Player, Payload: { ItemId: string })
 	local ItemId = Payload.ItemId
 	local Decision: Pricing.Decision? = nil
-	local Saved = DataService:Update(Player, function(Data)
-		local Result = Pricing.Decide(Shop, ItemId, Data.Coins, Data.OwnedItems)
-		Decision = Result
-		if Result.Outcome == "Granted" then
-			Data.Coins = Result.CoinsAfter
-			Data.OwnedItems[ItemId] = true
-		end
-	end)
+	local Legacy = DataService:EconomyFor(Player) == "Legacy"
+	local Saved = Legacy
+		and DataService:Update(Player, function(Data)
+			local Result = Pricing.Decide(Shop, ItemId, Data.Coins or 0, Data.OwnedItems)
+			Decision = Result
+			if Result.Outcome == "Granted" then
+				Data.Coins = Result.CoinsAfter
+				Data.OwnedItems[ItemId] = true
+			end
+		end)
 
 	local Outcome = "Unavailable"
 	if Saved and Decision ~= nil then

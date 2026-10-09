@@ -5,7 +5,7 @@
       "hasInit": true,
       "hasStart": false,
       "kind": "service",
-      "lineCount": 163,
+      "lineCount": 222,
       "listens": [
         "Profile.RequestSnapshot"
       ],
@@ -34,7 +34,7 @@
       "hasInit": true,
       "hasStart": true,
       "kind": "service",
-      "lineCount": 118,
+      "lineCount": 121,
       "listens": [
         "Orb.Collect"
       ],
@@ -45,7 +45,7 @@
       "hasInit": true,
       "hasStart": false,
       "kind": "service",
-      "lineCount": 41,
+      "lineCount": 43,
       "listens": [
         "Shop.Buy"
       ],

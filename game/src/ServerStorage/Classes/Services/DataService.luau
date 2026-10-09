@@ -3,6 +3,9 @@
 -- Update is the only sanctioned way to change save data, and every Update is checked, so a change
 -- that would put NaN or a function into the save is refused. GetData hands back the live table,
 -- so code that writes to it directly skips that check. The release check is only a backstop.
+-- SaveGate decides how far each save is upgraded. Only a server that talks to the backend ledger
+-- moves a save to version 2, where Coins live in the ledger. Any other server keeps the old
+-- version 1 Coins, and a save that already moved is never taken back.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -16,7 +19,9 @@ local Migrator = require(Shared.Logic.Data.Migrator)
 local Places = require(Shared.Configs.Places)
 local SaveSafety = require(Shared.Logic.Data.SaveSafety)
 local StoreSelector = require(Shared.Logic.Data.StoreSelector)
+local SaveGate = require(Shared.Logic.Data.SaveGate)
 local Template = require(Shared.Logic.Data.Template)
+local Backend = require(ServerStorage.Classes.Util.Backend)
 local BackendConfig = require(ServerStorage.Configs.Backend)
 local NetGuard = require(ServerStorage.Classes.Util.NetGuard)
 local ProfileService = require(ServerStorage.Vendor.ProfileService) :: any
@@ -30,6 +35,16 @@ local ActiveStore: any = nil
 local Profiles: { [Player]: any } = {}
 -- The last copy of each save that passed SaveSafety, used if something wrote bad data around Update.
 local LastGood: { [Player]: { [string]: any } } = {}
+-- Which economy each loaded player has, see SaveGate.
+local Economies: { [Player]: SaveGate.Economy } = {}
+-- Set once in Init. True when this server keeps Coins in the backend ledger.
+local EconomyLive = false
+
+-- Coins live in the backend ledger from M2 on. EconomyService tells DataService where to read them
+-- for the snapshot, so DataService never has to require EconomyService.
+local CoinsSource: (Player: Player) -> number = function(_Player: Player)
+	return 0
+end
 
 local function OnPlayerAdded(Player: Player)
 	local LoadedEvent = Instance.new("BindableEvent")
@@ -43,7 +58,7 @@ local function OnPlayerAdded(Player: Player)
 	end
 	Profile:AddUserId(Player.UserId)
 
-	local Outcome = Migrator.Run(Profile.Data, Migrations)
+	local Outcome, Economy = SaveGate.Prepare(Profile.Data, Migrations, Migrator.Run, EconomyLive)
 	if not Outcome.Ok then
 		-- The original save is untouched, so releasing it here saves exactly what was there before.
 		warn(`[DataService] could not upgrade the save for {Player.Name}, {Outcome.Error}`)
@@ -55,6 +70,7 @@ local function OnPlayerAdded(Player: Player)
 	local Original = SaveSafety.DeepCopy(Profile.Data)
 	SaveSafety.ReplaceContents(Profile.Data, Outcome.Data :: { [string]: any })
 	Profile:Reconcile()
+	SaveGate.Tidy(Profile.Data)
 	local Safe, Problem = SaveSafety.Check(Profile.Data)
 	if not Safe then
 		warn(`[DataService] the upgraded save for {Player.Name} is unsafe ({Problem}), leaving it as it was`)
@@ -67,6 +83,7 @@ local function OnPlayerAdded(Player: Player)
 	Profile:ListenToRelease(function()
 		Profiles[Player] = nil
 		LastGood[Player] = nil
+		Economies[Player] = nil
 		Player:Kick("Your save was opened somewhere else. Please rejoin.")
 	end)
 
@@ -77,8 +94,11 @@ local function OnPlayerAdded(Player: Player)
 
 	Profiles[Player] = Profile
 	LastGood[Player] = SaveSafety.DeepCopy(Profile.Data)
+	Economies[Player] = Economy :: SaveGate.Economy
 	Player:SetAttribute("ProfileLoaded", true)
-	print(`[DataService] loaded {Player.Name} at schema v{Outcome.ToVersion} (from v{Outcome.FromVersion})`)
+	print(
+		`[DataService] loaded {Player.Name} at schema v{Outcome.ToVersion} (from v{Outcome.FromVersion}), {Economy} economy`
+	)
 	LoadedEvent:Fire()
 	DataService:PushSnapshot(Player)
 end
@@ -94,6 +114,7 @@ local function ReleaseSafely(Player: Player)
 		SaveSafety.ReplaceContents(Profile.Data, SaveSafety.DeepCopy(LastGood[Player]))
 	end
 	Profiles[Player] = nil
+	Economies[Player] = nil
 	Profile:Release()
 	print(`[DataService] released {Player.Name}`)
 end
@@ -104,9 +125,11 @@ function DataService:Init()
 	local ForceMock = ServerStorage:GetAttribute("ForceMockData") == true
 		or BackendMode.ForceMockSaves(IsStudio, BackendConfig.StudioLedger)
 	local Choice = StoreSelector.Choose(game.PlaceId, IsStudio, Places, ForceMock)
-	local Store = ProfileService.GetProfileStore(Choice.StoreName, Template.Defaults)
+	-- The gate is read once, so every save on this server goes the same way.
+	EconomyLive = Backend.EconomyLive()
+	local Store = ProfileService.GetProfileStore(Choice.StoreName, SaveGate.DefaultsFor(EconomyLive, Template))
 	ActiveStore = if Choice.Kind == "Mock" then Store.Mock else Store
-	print(`[DataService] using the {Choice.Kind} store {Choice.StoreName}`)
+	print(`[DataService] using the {Choice.Kind} store {Choice.StoreName}, ledger economy {EconomyLive}`)
 
 	NetGuard.Listen("Profile.RequestSnapshot", function(Player: Player)
 		DataService:PushSnapshot(Player)
@@ -145,6 +168,36 @@ function DataService:Update(Player: Player, Mutator: (Draft: ProfileData) -> ())
 	return true, nil
 end
 
+-- Ledger, Legacy or Paused once the save is loaded, and nil before that.
+function DataService:EconomyFor(Player: Player): SaveGate.Economy?
+	return Economies[Player]
+end
+
+function DataService:SetCoinsSource(Source: (Player: Player) -> number)
+	CoinsSource = Source
+end
+
+-- Asks ProfileService to write the save now and waits until a save lands, for at most
+-- TimeoutSeconds. True means the save as it is now is in the DataStore. The legacy credit uses
+-- this, so the save that holds LegacyCoins is stored before any of them reach the ledger.
+function DataService:SaveNow(Player: Player, TimeoutSeconds: number): boolean
+	local Profile = Profiles[Player]
+	if Profile == nil then
+		return false
+	end
+	local Landed = false
+	local Connection = Profile.MetaTagsUpdated:Connect(function()
+		Landed = true
+	end)
+	Profile:Save()
+	local Started = os.clock()
+	while not Landed and Profiles[Player] == Profile and os.clock() - Started < TimeoutSeconds do
+		task.wait(0.25)
+	end
+	Connection:Disconnect()
+	return Landed and Profiles[Player] == Profile
+end
+
 function DataService:PushSnapshot(Player: Player)
 	local Data = DataService:GetData(Player)
 	if Data == nil or not NetGuard.IsSealed() then
@@ -157,7 +210,13 @@ function DataService:PushSnapshot(Player: Player)
 		end
 	end
 	table.sort(Owned)
-	NetGuard.SendTo(Player, "Profile.Snapshot", { Coins = Data.Coins, OwnedItems = Owned })
+	-- A Legacy player still has Coins in the save. Everyone else reads them from the ledger cache.
+	local Coins = if Economies[Player] == "Legacy" then Data.Coins or 0 else CoinsSource(Player)
+	Coins = math.floor(Coins)
+	if Coins ~= Coins then
+		Coins = 0
+	end
+	NetGuard.SendTo(Player, "Profile.Snapshot", { Coins = math.clamp(Coins, 0, 1000000000), OwnedItems = Owned })
 end
 
 return DataService
