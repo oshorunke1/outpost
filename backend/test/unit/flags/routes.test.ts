@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { buildApp } from '../../../src/app.js';
-import { createMemoryAppDeps } from '../../../src/memoryDeps.js';
+import { MEMORY_CONFIG, createMemoryAppDeps } from '../../../src/memoryDeps.js';
 import { FLAG_DEFAULTS, createMemoryFlagsService, createMysqlFlagsService } from '../../../src/modules/flags/flagsService.js';
 import type { Db } from '../../../src/platform/db.js';
 import { createFakeClock } from '../../support/clock.js';
@@ -52,6 +52,26 @@ describe('GET /v1/flags', () => {
     expect(down.json()).toEqual({ error: 'flags_unavailable', message: 'Flags are temporarily unavailable' });
     expect(down.headers['retry-after']).toBe('1');
     expect(down.body).not.toContain('ECONNREFUSED');
+  });
+});
+
+// M1: /v1/flags spends the default bucket, so a telemetry flood never 429s the flags poll.
+describe('flags rate limit group', () => {
+  test('a telemetry flood 429s telemetry while /v1/flags still answers', async () => {
+    const limited = await createMemoryAppDeps({
+      clock: createFakeClock(),
+      overrides: { config: { ...MEMORY_CONFIG, telemetryApiLimit: { capacity: 2, refillPerSecond: 0.001 } } },
+    });
+    const app = await buildApp(limited.deps);
+    const auth = bearer(await gameToken(limited.deps.tokens));
+    const batch = { events: [{ name: 'player_join', ts: limited.clock.now() }] };
+    const post = () => app.inject({ method: 'POST', url: '/v1/telemetry/batch', headers: auth, payload: batch });
+    for (let i = 0; i < 2; i += 1) expect((await post()).statusCode).toBe(202);
+    expect((await post()).statusCode).toBe(429);
+
+    const flags = await app.inject({ method: 'GET', url: '/v1/flags', headers: auth });
+    expect(flags.statusCode).toBe(200);
+    expect(flags.json()).toEqual({ flags: FLAG_DEFAULTS });
   });
 });
 
