@@ -40,6 +40,7 @@ components:
           type: string
           enum:
             - orbs
+            - legacy_migration
       required:
         - kind
         - userId

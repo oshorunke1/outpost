@@ -3,7 +3,9 @@ import { MINT_ACCOUNT, SINK_ACCOUNT, playerAccountId } from './accounts.js';
 import { isItemId, priceOf } from './catalog.js';
 import type { ItemId } from './catalog.js';
 
-export const EARN_REASONS = ['orbs'] as const;
+// orbs is gameplay. legacy_migration is the one-time credit of Coins a player saved before the ledger
+// existed; the game sends it in chunks under deterministic keys, so a replay can never pay twice.
+export const EARN_REASONS = ['orbs', 'legacy_migration'] as const;
 // A cap per transaction bounds what one leaked game key can mint per call (spec section 4.2).
 export const MAX_EARN_PER_TRANSACTION = 1000;
 

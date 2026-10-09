@@ -3,14 +3,14 @@ import { describe, expect, test } from 'vitest';
 import { MINT_ACCOUNT, SINK_ACCOUNT, playerAccountId } from '../../../src/modules/economy/accounts.js';
 import { CATALOG, ITEM_IDS, priceOf } from '../../../src/modules/economy/catalog.js';
 import type { ItemId } from '../../../src/modules/economy/catalog.js';
-import { MAX_EARN_PER_TRANSACTION, planRefund, planTransaction, requestHash, sumEntries } from '../../../src/modules/economy/plan.js';
+import { EARN_REASONS, MAX_EARN_PER_TRANSACTION, planRefund, planTransaction, requestHash, sumEntries } from '../../../src/modules/economy/plan.js';
 import type { Plan, TransactionRequest } from '../../../src/modules/economy/plan.js';
 
 const userIds = fc.integer({ min: 1, max: Number.MAX_SAFE_INTEGER });
 const earnAmounts = fc.integer({ min: 1, max: MAX_EARN_PER_TRANSACTION });
 const itemIds = fc.constantFrom(...ITEM_IDS);
 const requests: fc.Arbitrary<TransactionRequest> = fc.oneof(
-  fc.record({ kind: fc.constant('earn' as const), userId: userIds, amount: earnAmounts, reason: fc.constant('orbs' as const) }),
+  fc.record({ kind: fc.constant('earn' as const), userId: userIds, amount: earnAmounts, reason: fc.constantFrom(...EARN_REASONS) }),
   fc.record({ kind: fc.constant('purchase' as const), userId: userIds, itemId: itemIds }),
 );
 
@@ -36,6 +36,16 @@ describe('planTransaction', () => {
         ]);
       }),
     );
+  });
+
+  test('a legacy_migration earn pays exactly like an orbs earn and keeps its own reason', () => {
+    expect(EARN_REASONS).toEqual(['orbs', 'legacy_migration']);
+    const legacy = planTransaction({ kind: 'earn', userId: 1001, amount: 1000, reason: 'legacy_migration' });
+    const orbs = planTransaction({ kind: 'earn', userId: 1001, amount: 1000, reason: 'orbs' });
+    expect(legacy.reason).toBe('legacy_migration');
+    expect(legacy.entries).toEqual(orbs.entries);
+    expect(legacy.playerDelta).toBe(1000);
+    expect(() => planTransaction({ kind: 'earn', userId: 1001, amount: 1001, reason: 'legacy_migration' })).toThrow(RangeError);
   });
 
   test('every purchase sums to zero and charges the catalog price', () => {

@@ -1,3 +1,4 @@
+import type { RowDataPacket } from '../../src/platform/db.js';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import type { LedgerService } from '../../src/modules/economy/ledger.js';
 import { FAST_ARGON2, createArgon2Hasher, makeDummyHash } from '../../src/modules/identity/crypto/password.js';
@@ -97,6 +98,29 @@ describe('economy over HTTP on MySQL', () => {
     const reused = await transact('reuse-key-1', { kind: 'earn', userId: 1003, amount: 6, reason: 'orbs' });
     expect(reused.statusCode).toBe(409);
     expect(reused.json()).toMatchObject({ error: 'idempotency_key_reuse' });
+  });
+
+  test('a legacy credit in chunks pays once, replays on a rerun and keeps its reason', async () => {
+    await join(1020);
+    const chunks: [string, number][] = [
+      ['legacy-1020-1', 1000],
+      ['legacy-1020-2', 234],
+    ];
+    for (const [key, amount] of chunks) {
+      expect((await transact(key, { kind: 'earn', userId: 1020, amount, reason: 'legacy_migration' })).statusCode).toBe(201);
+    }
+    // A server that crashed before it marked the save sends the same chunks again, and nothing more is paid.
+    for (const [key, amount] of chunks) {
+      const again = await transact(key, { kind: 'earn', userId: 1020, amount, reason: 'legacy_migration' });
+      expect(again.statusCode).toBe(200);
+      expect(again.json()).toMatchObject({ replayed: true });
+    }
+    const changed = await transact('legacy-1020-2', { kind: 'earn', userId: 1020, amount: 300, reason: 'legacy_migration' });
+    expect(changed.statusCode).toBe(409);
+    expect(changed.json()).toMatchObject({ error: 'idempotency_key_reuse' });
+    expect((await app.inject({ method: 'GET', url: '/v1/players/1020/wallet', headers: auth })).json()).toEqual({ userId: 1020, balance: 1234 });
+    const [rows] = await ctx.db.execute<RowDataPacket[]>("SELECT reason FROM ledger_transactions WHERE idempotency_key LIKE 'legacy-1020-%' ORDER BY idempotency_key");
+    expect(rows.map((row) => row.reason as string)).toEqual(['legacy_migration', 'legacy_migration']);
   });
 
   test('a player who never joined is 404 player_not_found', async () => {

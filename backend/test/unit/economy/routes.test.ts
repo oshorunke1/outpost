@@ -60,6 +60,13 @@ describe('POST /v1/economy/transactions', () => {
     expect(calls).toEqual([{ principal: 'svc:game-server', idempotencyKey: 'job-1:1001:1', request: earn }]);
   });
 
+  test('a legacy_migration earn reaches the ledger with its reason', async () => {
+    const legacy = { kind: 'earn', userId: 1001, amount: 1000, reason: 'legacy_migration' };
+    const response = await post(legacy, { 'idempotency-key': 'legacy-1001-1' });
+    expect(response.statusCode).toBe(201);
+    expect(calls).toEqual([{ principal: 'svc:game-server', idempotencyKey: 'legacy-1001-1', request: legacy }]);
+  });
+
   test('a valid purchase sends only the item id, never a price', async () => {
     const response = await post({ kind: 'purchase', userId: 1001, itemId: 'RedHat' });
     expect(response.statusCode).toBe(201);
@@ -136,6 +143,7 @@ describe('POST /v1/economy/transactions', () => {
       { ...earn, amount: '10' },
       { ...earn, amount: Number.MAX_SAFE_INTEGER },
       { ...earn, reason: 'admin' },
+      { ...earn, reason: 'Legacy_Migration' },
       { ...earn, reason: undefined },
       { ...earn, userId: 0 },
       { ...earn, userId: -1001 },
