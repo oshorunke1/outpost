@@ -118,7 +118,7 @@ export async function createAppDeps(config: AppConfig, infra: Infra, options: Co
     // Each probe is bounded at a second, so a hung pool or a Redis that never answers is a fail, not a hang.
     health: createHealthChecks(
       { mysql: () => probeDb(db, PROBE_TIMEOUT_MS), redis: () => redis.ping() },
-      { logger: options.logger ?? baseLogger.child({ module: 'health' }) },
+      { clock, logger: options.logger ?? baseLogger.child({ module: 'health' }) },
     ),
   };
 }
