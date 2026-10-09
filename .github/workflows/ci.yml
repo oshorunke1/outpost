@@ -37,6 +37,8 @@ jobs:
               # The Lune drift specs read these backend sources, so a change there must rerun them.
               - 'backend/src/modules/telemetry/**'
               - 'backend/src/modules/economy/**'
+              - 'backend/src/modules/flags/**'
+              - 'backend/migrations/005_flags.sql'
               - '.github/workflows/ci.yml'
             backend:
               - 'backend/**'
