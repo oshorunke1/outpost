@@ -579,6 +579,56 @@ Describe("BackendClient deadline and the shared exchange", function()
 		Expect(string.find(tostring(Err), "waiter blew up", 1, true) ~= nil).ToBe(true)
 		Expect((Fine.Result :: Response).Status).ToBe(200)
 	end)
+
+	It("a 401 from a call that still used the old token does not throw away the new one", function()
+		local Tokens = 0
+		local Held: { thread } = {}
+		local Rig: Rig
+		Rig = MakeRig({}, nil, function(Request: TransportRequest): Response
+			table.insert(Rig.Calls, Request)
+			if string.find(Request.Url, "/auth/service-token", 1, true) then
+				Tokens += 1
+				return TokenReply(`tok-{Tokens}`)
+			end
+			table.insert(Held, coroutine.running())
+			return coroutine.yield()
+		end)
+		Spawn(Rig, Requests.Wallet(1001))
+		Spawn(Rig, Requests.Wallet(1002))
+		Expect(#Held).ToBe(2)
+		assert(coroutine.resume(Held[1], Reply(401)))
+		Expect(Tokens).ToBe(2)
+		assert(coroutine.resume(Held[2], Reply(401)))
+		Expect(Tokens).ToBe(2)
+		Expect(Rig.Calls[#Rig.Calls].Headers.Authorization).ToBe("Bearer tok-2")
+	end)
+
+	It("a 403 is returned as is and never triggers a token refresh", function()
+		local Rig = MakeRig({ TokenReply("tok-1"), Reply(403, { error = "forbidden" }), TokenReply("tok-2") })
+		Expect(Rig.Client:Send(Requests.Wallet(1001)).Status).ToBe(403)
+		Expect(#Rig.Calls).ToBe(2)
+	end)
+
+	It("an error thrown inside the exchange never wedges the client", function()
+		local Throwing = true
+		local Budget = {
+			Allow = function(_Self: any, _Key: string, _Now: number): boolean
+				if Throwing then
+					Throwing = false
+					error("budget blew up")
+				end
+				return true
+			end,
+		}
+		local Rig = MakeRig({ TokenReply("tok-1"), Reply(200, {}) }, Budget)
+		local Worked, Result = pcall(function()
+			return Rig.Client:Send(Requests.Wallet(1001))
+		end)
+		Expect(Worked).ToBe(true)
+		Expect((Result :: Response).Status).ToBe(0)
+		Expect(Rig.Client:Send(Requests.Wallet(1001)).Status).ToBe(200)
+		Expect(Rig.Calls[1].Url).ToBe("http://backend.test/auth/service-token")
+	end)
 end)
 
 return nil
