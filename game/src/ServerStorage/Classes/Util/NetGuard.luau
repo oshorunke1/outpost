@@ -35,6 +35,10 @@ end
 local Gate = PacketGate.new(BuildEntries(), LogEverySeconds)
 local Remotes: { [string]: RemoteEvent? } = {}
 
+-- TelemetryService uses this to count dropped packets. It only hears drops that are also logged,
+-- so a flood from one player costs at most one event per packet every 5 seconds.
+local DropObserver: ((Player: Player, PacketName: string, Reason: string) -> ())? = nil
+
 local NetGuard = {}
 
 function NetGuard.Listen(Name: string, Handler: (Player: Player, Payload: any) -> ())
@@ -45,6 +49,12 @@ function NetGuard.IsSealed(): boolean
 	return Gate:IsSealed()
 end
 
+-- Hears every drop that also gets logged. The name is always a real packet, because each remote
+-- passes its own name, and the reason comes from PacketGate, so neither is something a player typed.
+function NetGuard.SetDropObserver(Observer: (Player: Player, PacketName: string, Reason: string) -> ())
+	DropObserver = Observer
+end
+
 local function OnServerEvent(Name: string, Player: Player, ...: any)
 	local ArgCount = select("#", ...)
 	local Payload = (...)
@@ -52,6 +62,10 @@ local function OnServerEvent(Name: string, Player: Player, ...: any)
 	if not Verdict.Accepted then
 		if Verdict.ShouldLog then
 			warn(`[NetGuard] dropped {Name} from {Player.Name} ({Player.UserId}), reason {Verdict.Reason}`)
+			local Observer = DropObserver
+			if Observer ~= nil then
+				task.spawn(Observer, Player, Name, tostring(Verdict.Reason))
+			end
 		end
 		return
 	end
